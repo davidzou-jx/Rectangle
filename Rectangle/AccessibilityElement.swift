@@ -33,7 +33,7 @@ class AccessibilityElement {
         return array.map { AccessibilityElement($0) }
     }
     
-    private var role: NSAccessibility.Role? {
+    var role: NSAccessibility.Role? {
         guard let value = wrappedElement.getValue(.role) as? String else { return nil }
         return NSAccessibility.Role(rawValue: value)
     }
@@ -95,7 +95,7 @@ class AccessibilityElement {
             && !frame.isEmpty && !frame.isInfinite && titleBar.contains(frame)
     }
     
-    private var subrole: NSAccessibility.Subrole? {
+    var subrole: NSAccessibility.Subrole? {
         guard let value = wrappedElement.getValue(.subrole) as? String else { return nil }
         return NSAccessibility.Subrole(rawValue: value)
     }
@@ -256,8 +256,26 @@ class AccessibilityElement {
         return AXUIElementSetAttributeValue(wrappedElement, kAXSizeAttribute as CFString, value)
     }
     
-    private var childElements: [AccessibilityElement]? {
+    var childElements: [AccessibilityElement]? {
         getElementsValue(.children)
+    }
+
+    var actionNames: [String] {
+        wrappedElement.getActionNames()
+    }
+
+    var titleElement: AccessibilityElement? {
+        getElementValue(.titleUIElement)
+    }
+
+    var topLevelElement: AccessibilityElement? {
+        if isWindow == true || isSheet == true { return self }
+        return getElementValue(.topLevelUIElement)
+    }
+
+    func getElementAtPosition(_ position: CGPoint) -> AccessibilityElement? {
+        guard let element = wrappedElement.getElementAtPosition(position) else { return nil }
+        return AccessibilityElement(element)
     }
     
     func getChildElement(_ role: NSAccessibility.Role) -> AccessibilityElement? {
@@ -357,6 +375,16 @@ class AccessibilityElement {
         windowElement?.wrappedElement.getValue(.minimized) as? Bool
     }
 
+    var isModal: Bool? {
+        let element = topLevelElement ?? windowElement ?? self
+        return element.wrappedElement.getValue(.modal) as? Bool
+    }
+
+    var isPositionSettable: Bool? {
+        let element = windowElement ?? self
+        return element.wrappedElement.isValueSettable(.position)
+    }
+
     var title: String? {
         wrappedElement.getValue(.title) as? String
     }
@@ -368,8 +396,8 @@ class AccessibilityElement {
     }
     
     var isFullScreen: Bool? {
-        guard let subrole = windowElement?.getElementValue(.fullScreenButton)?.subrole else { return nil }
-        return subrole == .zoomButton
+        let element = windowElement ?? self
+        return element.wrappedElement.getValue(.fullScreen) as? Bool
     }
     
     var titleBarFrame: CGRect? {
@@ -421,6 +449,7 @@ class AccessibilityElement {
     }
     
     func bringToFront(force: Bool = false) {
+        _ = (windowElement ?? self).wrappedElement.performAction(kAXRaiseAction)
         if isMainWindow != true {
             isMainWindow = true
         }

@@ -245,6 +245,8 @@ class SnappingManager {
     }
     
     func filter(event: NSEvent) -> Bool {
+        guard !Self.isSpaceMoveEvent(event) else { return false }
+
         switch event.type {
         case .leftMouseUp:
             dragPrevY = nil
@@ -282,6 +284,8 @@ class SnappingManager {
     }
     
     func handle(event: NSEvent) {
+        guard !Self.isSpaceMoveEvent(event) else { return }
+
         switch event.type {
         case .keyDown:
             guard event.keyCode == 53, nativeGesture.held else { return }
@@ -421,6 +425,10 @@ class SnappingManager {
         default:
             return
         }
+    }
+
+    static func isSpaceMoveEvent(_ event: NSEvent) -> Bool {
+        event.cgEvent?.getIntegerValueField(.eventSourceUserData) == spaceMoveSyntheticEventTag
     }
     
     private func dragGeometry() -> WindowDragGeometry? {

@@ -5,6 +5,7 @@ The preferences window is purposefully slim, but there's a lot that can be modif
 ## Contents
 
 - [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Change how Move to Space switches Spaces](#change-how-move-to-space-switches-spaces)
 - [Adjust Behavior on Repeated Commands](#adjust-behavior-on-repeated-commands)
 - [Cycle thirds on repeated Center Half commands](#cycle-thirds-on-repeated-center-half-commands)
 - [Resize on Directional Move](#resize-on-directional-move)
@@ -27,7 +28,7 @@ The preferences window is purposefully slim, but there's a lot that can be modif
 - [Make Smaller/Make Larger "curtain resize" with gaps](#make-smallermake-larger-curtain-resize-with-gaps)
 - [Make Smaller/Make Larger width only](#make-smallermake-larger-width-only)
 - [Make Smaller/Make Larger height only](#make-smallermake-larger-height-only)
-- [Make Smaller shrink the height of full-height windows](#make-smaller-shrink-the-height-of-full-height-windows)
+- [Make Smaller shrink the height of full-height windows in Absolute mode](#make-smaller-shrink-the-height-of-full-height-windows-in-absolute-mode)
 - [Disabling window restore when moving windows](#disabling-window-restore-when-moving-windows)
 - [Changing the margin for the snap areas](#changing-the-margin-for-the-snap-areas)
 - [Setting gaps at the screen edges](#setting-gaps-at-the-screen-edges)
@@ -52,6 +53,27 @@ If you wish to change the default shortcuts after first launch click "Restore De
 ```bash
 defaults write com.knollsoft.Rectangle alternateDefaultShortcuts -bool true
 ```
+
+## Change how Move to Space switches Spaces
+
+The Next Space and Previous Space actions move a window through SkyLight when its bridged operation is available. If that operation is unavailable, Rectangle uses a synthetic drag with a Dock swipe. On macOS 26.0 through 26.5, the drag fallback automatically uses the system keyboard shortcuts instead to avoid a WindowServer rendering bug. You can choose the fallback switching backend explicitly:
+
+```bash
+# 0: automatic, 1: Dock swipe, 2: system keyboard shortcut
+defaults write com.knollsoft.Rectangle spaceSwitchingMethod -int 0
+```
+
+When the system keyboard shortcut backend is selected, the defaults are Control-Fn-Right Arrow and Control-Fn-Left Arrow. If the Mission Control shortcuts on the Mac use different keys, set their virtual key codes and modifier flags here:
+
+```bash
+defaults write com.knollsoft.Rectangle nextSpaceSwitchKeyCode -int 124
+defaults write com.knollsoft.Rectangle previousSpaceSwitchKeyCode -int 123
+defaults write com.knollsoft.Rectangle spaceSwitchModifierFlags -int 8650752
+```
+
+The modifier value uses the same integers listed under [Only allow drag-to-snap when modifier keys are pressed](#only-allow-drag-to-snap-when-modifier-keys-are-pressed). Add the values for combined modifiers; `8650752` is Control plus Fn.
+
+These settings do not change **Switch to Next Space** and **Switch to Previous Space**. Those commands always use their dedicated instant Dock gesture.
 
 ## Adjust Behavior on Repeated Commands
 
@@ -360,7 +382,17 @@ defaults write com.knollsoft.Rectangle minimumWindowHeight -float <VALUE_BETWEEN
 
 ## Make Smaller/Make Larger size increments
 
-By default, "Make Smaller" and "Make Larger" change the window height/width by 30 pixels.
+In Settings > General, choose **Percent**, **Width (px)**, **Height (px)**, or **Absolute (px)** for the Larger / Smaller step. The default is 5%. In Percent mode, Larger multiplies each dimension by `1 + percentage / 100` and Smaller divides by that same factor, so a Larger step followed by a Smaller step restores the window's size when screen or minimum-size limits do not intervene. In Width or Height mode, Rectangle changes the selected dimension by the configured number of pixels and scales the other dimension by the same proportion. Absolute mode restores the original behavior: it adds or subtracts the same pixel amount from both dimensions, subject to the original screen-edge rules. Screen and minimum window sizes can limit a step.
+
+The same settings can be changed from the terminal. Use `0` for percent, `1` for width pixels, `2` for height pixels, or `3` for absolute pixels:
+
+```bash
+defaults write com.knollsoft.Rectangle sizeScalingMode -int 0
+defaults write com.knollsoft.Rectangle sizeScalePercent -float <PERCENT_BETWEEN_0_AND_100>
+defaults write com.knollsoft.Rectangle sizeScalePixels -float <POSITIVE_PIXEL_AMOUNT>
+```
+
+Absolute mode and the height-only commands use a 30-pixel increment by default. Change it with:
 
 ```bash
 defaults write com.knollsoft.Rectangle sizeOffset -float <NUM_PIXELS>
@@ -368,7 +400,7 @@ defaults write com.knollsoft.Rectangle sizeOffset -float <NUM_PIXELS>
 
 ## Make Smaller/Make Larger "curtain resize" with gaps
 
-By default, windows touching the edge of the screen will keep those shared edges the same while only resizing the non-shared edge. With window gaps, this is a little ambiguous since the edges don't actually touch the screen, so you can disable it for traditional, floating resizing:
+By default, windows touching one edge of the screen stay anchored to that edge while resizing. In the proportional modes, windows touching both opposite edges resize around their center to preserve their proportions. Absolute mode uses the original edge behavior. With window gaps, edge detection can be ambiguous, so you can disable edge anchoring for traditional, floating resizing:
 
 ```bash
 defaults write com.knollsoft.Rectangle curtainChangeSize -int 2
@@ -376,7 +408,7 @@ defaults write com.knollsoft.Rectangle curtainChangeSize -int 2
 
 ## Make Smaller/Make Larger width only
 
-By default, "Make Smaller" and "Make Larger" change both, the window height and the window width. If you only want to change the window width without changing window height, configure shortcuts for the _largerWidth_ and _smallerWidth_ commands.
+By default, "Make Smaller" and "Make Larger" scale both window dimensions. If you only want to change the window width without changing window height, configure shortcuts for the _largerWidth_ and _smallerWidth_ commands. These width-only commands use pixel increments.
 
 For example, if you want to assign `ctrl option ]` to _largerWidth_ and `ctrl option [` to _smallerWidth_, the commands would be:
 
@@ -396,9 +428,9 @@ defaults write com.knollsoft.Rectangle largerHeight -dict-add keyCode -float 30 
 defaults write com.knollsoft.Rectangle smallerHeight -dict-add keyCode -float 33 modifierFlags -float 917504
 ```
 
-## Make Smaller shrink the height of full-height windows
+## Make Smaller shrink the height of full-height windows in Absolute mode
 
-By default, "Make Smaller" keeps the height of a window that spans the full height of the screen (for example after "Half" or "Maximize Height") and only shrinks its width. Enable this to shrink the height as well:
+In Absolute mode, "Make Smaller" keeps the height of a window that spans the full height of the screen (for example after "Half" or "Maximize Height") and only shrinks its width. Enable this to shrink the height as well:
 
 ```bash
 defaults write com.knollsoft.Rectangle smallerShrinksMaximizedHeight -bool true

@@ -24,6 +24,25 @@ final class BehaviorSettingsViewModel {
             Defaults.cooperativeCornerResize.enabled = cooperativeCornerResize
         }
     }
+
+    var sizeScalingMode: SizeScalingMode {
+        didSet {
+            Defaults.sizeScalingMode.value = sizeScalingMode
+            sizeScalingAmount = Self.configuredSizeScalingAmount(for: sizeScalingMode)
+        }
+    }
+
+    var sizeScalingAmount: Float {
+        didSet {
+            guard sizeScalingAmount.isFinite,
+                  sizeScalingAmount >= 1,
+                  (sizeScalingMode != .percentage || sizeScalingAmount <= 99) else {
+                sizeScalingAmount = oldValue
+                return
+            }
+            Self.sizeScalingPreference(for: sizeScalingMode).value = sizeScalingAmount
+        }
+    }
     
     var gapSize: Double
     var skipGapTopEdge: Bool {
@@ -41,6 +60,12 @@ final class BehaviorSettingsViewModel {
     var centerAcrossDisplays: Bool {
         didSet {
             Defaults.centerAcrossDisplays.enabled = centerAcrossDisplays
+        }
+    }
+
+    var followMovedWindowToSpace: Bool {
+        didSet {
+            Defaults.followMovedWindowToSpace.enabled = followMovedWindowToSpace
         }
     }
     
@@ -167,6 +192,20 @@ final class BehaviorSettingsViewModel {
     var stageCapable: Bool { StageUtil.stageCapable }
     
     private var aboutTodoWindowController: NSWindowController?
+
+    private static func sizeScalingPreference(for mode: SizeScalingMode) -> FloatDefault {
+        switch mode {
+        case .percentage: return Defaults.sizeScalePercent
+        case .widthPixels, .heightPixels: return Defaults.sizeScalePixels
+        case .absolutePixels: return Defaults.sizeOffset
+        }
+    }
+
+    private static func configuredSizeScalingAmount(for mode: SizeScalingMode) -> Float {
+        let value = sizeScalingPreference(for: mode).value
+        let fallback: Float = mode == .percentage ? 5 : 30
+        return value.isFinite && value >= 1 && (mode != .percentage || value <= 99) ? value : fallback
+    }
     
     // MARK: - Initialization
     init() {
@@ -176,12 +215,16 @@ final class BehaviorSettingsViewModel {
         self.selectedCycleSizes = isCycleChanged ? Defaults.selectedCycleSizes.value : CycleSize.defaultSizes
         self.cornerCycleExpansionAxis = Defaults.cornerCycleExpansionAxis.value
         self.cooperativeCornerResize = Defaults.cooperativeCornerResize.enabled
+        let scalingMode = Defaults.sizeScalingMode.value
+        self.sizeScalingMode = scalingMode
+        self.sizeScalingAmount = Self.configuredSizeScalingAmount(for: scalingMode)
         
         self.gapSize = Double(Defaults.gapSize.value)
         self.skipGapTopEdge = Defaults.skipGapTopEdge.enabled
         
         self.moveCursorAcrossDisplays = Defaults.moveCursorAcrossDisplays.userEnabled
         self.centerAcrossDisplays = Defaults.centerAcrossDisplays.userEnabled
+        self.followMovedWindowToSpace = !Defaults.followMovedWindowToSpace.userDisabled
         self.useCursorScreenDetection = Defaults.useCursorScreenDetection.enabled
         
         self.doubleClickTitleBar = WindowAction(rawValue: Defaults.doubleClickTitleBar.value - 1) != nil
@@ -230,12 +273,15 @@ final class BehaviorSettingsViewModel {
         self.selectedCycleSizes = isCycleChanged ? Defaults.selectedCycleSizes.value : CycleSize.defaultSizes
         self.cornerCycleExpansionAxis = Defaults.cornerCycleExpansionAxis.value
         self.cooperativeCornerResize = Defaults.cooperativeCornerResize.enabled
+        self.sizeScalingMode = Defaults.sizeScalingMode.value
+        self.sizeScalingAmount = Self.configuredSizeScalingAmount(for: sizeScalingMode)
         
         self.gapSize = Double(Defaults.gapSize.value)
         self.skipGapTopEdge = Defaults.skipGapTopEdge.enabled
         
         self.moveCursorAcrossDisplays = Defaults.moveCursorAcrossDisplays.userEnabled
         self.centerAcrossDisplays = Defaults.centerAcrossDisplays.userEnabled
+        self.followMovedWindowToSpace = !Defaults.followMovedWindowToSpace.userDisabled
         self.useCursorScreenDetection = Defaults.useCursorScreenDetection.enabled
         
         self.doubleClickTitleBar = WindowAction(rawValue: Defaults.doubleClickTitleBar.value - 1) != nil

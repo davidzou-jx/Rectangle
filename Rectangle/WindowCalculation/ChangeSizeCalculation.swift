@@ -2,12 +2,23 @@
 
 import Foundation
 
+enum SizeScalingMode: Int {
+    case percentage
+    case widthPixels
+    case heightPixels
+    case absolutePixels
+}
+
 class ChangeSizeCalculation: WindowCalculation, ChangeWindowDimensionCalculation {
 
     let screenEdgeGapSize: CGFloat
-    let sizeOffsetAbs: CGFloat
     let curtainChangeSize = Defaults.curtainChangeSize.enabled != false
     let smallerShrinksMaximizedHeight = Defaults.smallerShrinksMaximizedHeight.enabled
+
+    var sizeOffsetAbs: CGFloat {
+        let configured = Defaults.sizeOffset.value
+        return configured > 0 ? CGFloat(configured) : 30
+    }
 
     var widthOffsetAbs: CGFloat {
         CGFloat(Defaults.widthStepSize.value)
@@ -17,13 +28,14 @@ class ChangeSizeCalculation: WindowCalculation, ChangeWindowDimensionCalculation
         let windowGapSize = Defaults.gapSize.value
         screenEdgeGapSize = (windowGapSize <= 0) ? 5.0 : CGFloat(windowGapSize)
 
-        let defaultSizeOffset = Defaults.sizeOffset.value
-        sizeOffsetAbs = (defaultSizeOffset <= 0)
-            ? 30.0
-            : CGFloat(defaultSizeOffset)
     }
 
     override func calculateRect(_ params: RectCalculationParameters) -> RectResult {
+
+        if (params.action == .larger || params.action == .smaller),
+           Defaults.sizeScalingMode.value != .absolutePixels {
+            return RectResult(scaledRect(params))
+        }
 
         let sizeOffset: CGFloat
         switch params.action {
@@ -70,9 +82,7 @@ class ChangeSizeCalculation: WindowCalculation, ChangeWindowDimensionCalculation
             resizedWindowRect.origin.y = resizedWindowRect.minY - floor(sizeOffset / 2.0)
 
             // The height-only Smaller command skips the top/bottom edge curtain so it can
-            // shrink even a full-height window. smallerShrinksMaximizedHeight extends that
-            // exemption to the combined Smaller command, which otherwise keeps the height
-            // of a window pinned to the top and bottom screen edges.
+            // shrink even a full-height window. The legacy option extends this to Smaller.
             let heightCurtainActions: [WindowAction] = smallerShrinksMaximizedHeight
                 ? [.smaller, .smallerHeight]
                 : [.smallerHeight]
@@ -104,6 +114,79 @@ class ChangeSizeCalculation: WindowCalculation, ChangeWindowDimensionCalculation
         }
 
         return RectResult(resizedWindowRect)
+    }
+
+    private func scaledRect(_ params: RectCalculationParameters) -> CGRect {
+        let original = params.window.rect
+        let screen = params.visibleFrameOfScreen
+        guard original.width > 0, original.height > 0, screen.width > 0, screen.height > 0 else {
+            return original
+        }
+
+        let mode = Defaults.sizeScalingMode.value
+        let step: CGFloat
+        switch mode {
+        case .percentage:
+            let configuredPercent = Defaults.sizeScalePercent.value
+            let percent = configuredPercent.isFinite && configuredPercent > 0 && configuredPercent < 100
+                ? CGFloat(configuredPercent)
+                : 5
+            step = percent / 100
+        case .widthPixels, .heightPixels:
+            let configuredPixels = Defaults.sizeScalePixels.value
+            let pixels = configuredPixels.isFinite && configuredPixels > 0
+                ? CGFloat(configuredPixels)
+                : 30
+            let base = mode == .widthPixels ? original.width : original.height
+            step = pixels / base
+        case .absolutePixels:
+            return original
+        }
+        var scale: CGFloat
+        if params.action == .larger {
+            scale = 1 + step
+        } else {
+            scale = mode == .percentage ? 1 / (1 + step) : 1 - step
+        }
+
+        if params.action == .larger {
+            scale = min(scale, screen.width / original.width, screen.height / original.height)
+            guard scale > 1 else { return original }
+        } else {
+            // The same factor must fit both minimum dimensions to preserve the aspect ratio.
+            let minimumWidth = max(1, floor(screen.width * minimumWindowFraction(Defaults.minimumWindowWidth)))
+            let minimumHeight = max(1, floor(screen.height * minimumWindowFraction(Defaults.minimumWindowHeight)))
+            scale = max(scale, minimumWidth / original.width, minimumHeight / original.height)
+            guard scale < 1 else { return original }
+        }
+
+        let width = original.width * scale
+        let height = original.height * scale
+        let gap = CGFloat(Defaults.gapSize.value)
+        let halfWidthChange = (width - original.width) / 2
+        let halfHeightChange = (height - original.height) / 2
+        let xOffset = mode == .percentage ? halfWidthChange : floor(halfWidthChange)
+        let yOffset = mode == .percentage ? halfHeightChange : floor(halfHeightChange)
+        var result = CGRect(x: original.minX - xOffset,
+                            y: original.minY - yOffset,
+                            width: width,
+                            height: height)
+
+        if curtainChangeSize {
+            let left = againstLeftScreenEdge(original, screen)
+            let right = againstRightScreenEdge(original, screen)
+            let bottom = againstBottomScreenEdge(original, screen)
+            let top = againstTopScreenEdge(original, screen)
+
+            if left != right {
+                result.origin.x = left ? screen.minX + gap : screen.maxX - width - gap
+            }
+            if bottom != top {
+                result.origin.y = bottom ? screen.minY + gap : screen.maxY - height - gap
+            }
+        }
+
+        return result
     }
 
     private func againstScreenEdge(_ gap: CGFloat) -> Bool {

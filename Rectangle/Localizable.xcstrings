@@ -2043,8 +2043,28 @@
         }
       }
     },
+    "Absolute (px)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Absolute (px)"
+          }
+        }
+      }
+    },
     "Across Display Settings" : {
 
+    },
+    "Add or subtract this many pixels from both dimensions." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add or subtract this many pixels from both dimensions."
+          }
+        }
+      }
     },
     "After Rectangle maximizes or almost maximizes a window, executing the same action again moves the window back to its previous size and position." : {
       "extractionState" : "manual",
@@ -2243,6 +2263,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "幾乎放到最大"
+          }
+        }
+      }
+    },
+    "Amount" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amount"
           }
         }
       }
@@ -12935,6 +12965,16 @@
         }
       }
     },
+    "Height (px)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Height (px)"
+          }
+        }
+      }
+    },
     "Help" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15138,6 +15178,26 @@
     },
     "Landscape Snap Areas" : {
 
+    },
+    "Larger / Smaller" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Larger / Smaller"
+          }
+        }
+      }
+    },
+    "Larger / Smaller amount" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Larger / Smaller amount"
+          }
+        }
+      }
     },
     "Larger Width" : {
       "localizations" : {
@@ -21367,6 +21427,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "貼上並符合樣式"
+          }
+        }
+      }
+    },
+    "Percent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Percent"
           }
         }
       }
@@ -27794,6 +27864,26 @@
         }
       }
     },
+    "Switch to the destination Space after moving a window" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to the destination Space after moving a window"
+          }
+        }
+      }
+    },
+    "The other dimension changes by the same proportion." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The other dimension changes by the same proportion."
+          }
+        }
+      }
+    },
     "Third Fourth" : {
       "localizations" : {
         "ar" : {
@@ -33387,6 +33477,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在待辦模式下，若要重新整理待辦模式佈局，你可以從Rectangle選單中選擇「重新排列待辦」，或使用相應的鍵盤快捷鍵"
+          }
+        }
+      }
+    },
+    "Width (px)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Width (px)"
           }
         }
       }

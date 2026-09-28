@@ -15,7 +15,7 @@ extension ChangeWindowDimensionCalculation {
         minimumWindowFraction(Defaults.minimumWindowHeight)
     }
 
-    private func minimumWindowFraction(_ preference: DoubleDefault) -> CGFloat {
+    func minimumWindowFraction(_ preference: DoubleDefault) -> CGFloat {
         let value = preference.value
         return (!value.isFinite || value < 0 || value > 1)
             ? 0.25

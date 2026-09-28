@@ -55,6 +55,24 @@ Moving or resizing a window, opening or closing one, or changing screen-edge gap
 
 The Todo window is excluded using the same rules as Rectangle's other multi-window actions. The bands respect the existing Todo sidebar reservation. For example, with 1000 pixels available and a 200-pixel sidebar reservation, the other windows tile within the remaining 800 pixels while Todo stays in place.
 
+### Switch Spaces
+
+Assign shortcuts to **Switch to Next Space** and **Switch to Previous Space** in Preferences > Shortcuts to change the displayed Space without moving a window. These commands use Tinycast's three-phase synthetic trackpad gesture, including its macOS 27 event payload and Natural Scrolling handling, so the switch completes without the normal sliding transition. Overlapping shortcut presses are dropped while a switch is in progress. Accessibility permission is required.
+
+At either end of a display's Space arrangement, switching farther in that direction does nothing.
+
+### Move a window between Spaces
+
+Assign shortcuts to **Next Space** and **Previous Space** in Preferences > Shortcuts. On systems with the bridged SkyLight window-management operation, Rectangle moves the focused window to the adjacent normal Space on its display, verifies that the window arrived, and then switches that display to the destination Space. It does not require a draggable title bar or a running Yabai service. Rectangle must be allowed in System Settings > Privacy & Security > Accessibility for this feature to work.
+
+Each display has its own Space order. Trying to move beyond the first or last normal Space on the window's display leaves the window and displayed Space unchanged; the move command never chooses a Space on another display.
+
+In Preferences > General, turn off **Switch to the destination Space after moving a window** to move the window while staying on the current Space. This setting is on by default and requires the bridged move operation; the drag fallback cannot move a window without also switching Spaces.
+
+If the bridged operation is unavailable, Rectangle falls back to a verified title-bar drag while switching Spaces. On macOS 26.0 through 26.5, that fallback uses the standard Control-Fn-Arrow Space shortcuts instead of a Dock swipe to avoid a WindowServer rendering bug. Those system shortcuts must retain their default assignments on these releases.
+
+Sheets, modal windows, minimized windows, and native full-screen/Split View windows are left alone. The drag fallback also requires a safe draggable area. Its Space-switching backend and key codes can be changed with the [hidden preferences](TerminalCommands.md#change-how-move-to-space-switches-spaces).
+
 ### Ignore an app
 
 Ignoring an app means that when the app is frontmost, keyboard shortcuts are un-registered from macOS. When the app is no longer frontmost, keyboard shortcuts are re-registered with macOS. This is useful for apps that have the same shortcuts like Rectangle and you do not want to change them.
@@ -68,7 +86,7 @@ To un-ignore an app that you have selected to ignore, simply bring that app fron
 
 Open the URL `rectangle://execute-action?name=[name]`. Do not activate Rectangle if possible.
 
-Available values for `[name]`: `left-half`, `right-half`, `center-half`, `top-half`, `bottom-half`, `top-left`, `top-right`, `bottom-left`, `bottom-right`, `first-third`, `center-third`, `last-third`, `first-two-thirds`, `last-two-thirds`, `maximize`, `almost-maximize`, `maximize-height`, `smaller`, `larger`, `center`, `center-prominently`, `restore`, `next-display`, `previous-display`, `move-left`, `move-right`, `move-up`, `move-down`, `first-fourth`, `second-fourth`, `third-fourth`, `last-fourth`, `first-three-fourths`, `last-three-fourths`, `top-left-sixth`, `top-center-sixth`, `top-right-sixth`, `bottom-left-sixth`, `bottom-center-sixth`, `bottom-right-sixth`, `specified`, `reverse-all`, `top-left-ninth`, `top-center-ninth`, `top-right-ninth`, `middle-left-ninth`, `middle-center-ninth`, `middle-right-ninth`, `bottom-left-ninth`, `bottom-center-ninth`, `bottom-right-ninth`, `top-left-third`, `top-right-third`, `bottom-left-third`, `bottom-right-third`, `top-left-eighth`, `top-center-left-eighth`, `top-center-right-eighth`, `top-right-eighth`, `bottom-left-eighth`, `bottom-center-left-eighth`, `bottom-center-right-eighth`, `bottom-right-eighth`, `tile-all`, `tile-rows`, `tile-columns`, `cascade-all`, `cascade-active-app`
+Available values for `[name]`: `left-half`, `right-half`, `center-half`, `top-half`, `bottom-half`, `top-left`, `top-right`, `bottom-left`, `bottom-right`, `first-third`, `center-third`, `last-third`, `first-two-thirds`, `last-two-thirds`, `maximize`, `almost-maximize`, `maximize-height`, `smaller`, `larger`, `center`, `center-prominently`, `restore`, `next-display`, `previous-display`, `next-space`, `prev-space`, `switch-next-space`, `switch-prev-space`, `move-left`, `move-right`, `move-up`, `move-down`, `first-fourth`, `second-fourth`, `third-fourth`, `last-fourth`, `first-three-fourths`, `last-three-fourths`, `top-left-sixth`, `top-center-sixth`, `top-right-sixth`, `bottom-left-sixth`, `bottom-center-sixth`, `bottom-right-sixth`, `specified`, `reverse-all`, `top-left-ninth`, `top-center-ninth`, `top-right-ninth`, `middle-left-ninth`, `middle-center-ninth`, `middle-right-ninth`, `bottom-left-ninth`, `bottom-center-ninth`, `bottom-right-ninth`, `top-left-third`, `top-right-third`, `bottom-left-third`, `bottom-right-third`, `top-left-eighth`, `top-center-left-eighth`, `top-center-right-eighth`, `top-right-eighth`, `bottom-left-eighth`, `bottom-center-left-eighth`, `bottom-center-right-eighth`, `bottom-right-eighth`, `tile-all`, `tile-rows`, `tile-columns`, `cascade-all`, `cascade-active-app`
 
 Example, from a shell: `open -g "rectangle://execute-action?name=left-half"`
 
@@ -97,10 +115,6 @@ See [TerminalCommands.md](TerminalCommands.md)
 * Windows will snap when dragged to edges/corners of the screen. This can be disabled.
 
 ## Common Known Issues
-
-### Rectangle doesn't have the ability to move to other desktops/spaces
-
-Apple never released a public API for doing this. Rectangle Pro has next/prev Space actions, but there are no plans to add those into Rectangle at this time.
 
 ### Windows overlap when using thirds or other small layouts
 

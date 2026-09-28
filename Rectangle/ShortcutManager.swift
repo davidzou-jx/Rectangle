@@ -35,6 +35,8 @@ class ShortcutManager {
 
     let windowManager: WindowManager
     private let screenDetection: ScreenDetection
+    private let spaceManager: SpaceActionExecuting
+    private let spaceSwitcher: SpaceActionExecuting
     private let bindingStore: ShortcutBindingStore
     private let notificationCenter: NotificationCenter
     private let workspaceNotificationCenter: NotificationCenter
@@ -53,6 +55,8 @@ class ShortcutManager {
     init(
         windowManager: WindowManager,
         screenDetection: ScreenDetection = ScreenDetection(),
+        spaceManager: SpaceActionExecuting = BridgedSpaceManager(),
+        spaceSwitcher: SpaceActionExecuting = SpaceSwitcher(),
         bindingStore: ShortcutBindingStore = MASShortcutBindingStore(),
         notificationCenter: NotificationCenter = .default,
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
@@ -72,6 +76,8 @@ class ShortcutManager {
     ) {
         self.windowManager = windowManager
         self.screenDetection = screenDetection
+        self.spaceManager = spaceManager
+        self.spaceSwitcher = spaceSwitcher
         self.bindingStore = bindingStore
         self.notificationCenter = notificationCenter
         self.workspaceNotificationCenter = workspaceNotificationCenter
@@ -205,6 +211,14 @@ class ShortcutManager {
 
     private func execute(_ originalParameters: ExecutionParameters) {
         var parameters = originalParameters
+
+        if spaceManager.execute(parameters: parameters) {
+            return
+        }
+
+        if spaceSwitcher.execute(parameters: parameters) {
+            return
+        }
 
         if MultiWindowManager.execute(parameters: parameters) {
             return

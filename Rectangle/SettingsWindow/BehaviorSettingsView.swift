@@ -42,6 +42,13 @@ struct BehaviorSettingsView: View {
         return formatter
     }()
 
+    private static let sizeScalingFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.minimum = 1
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
     var body: some View {
         Form {
             // MARK: - Cycle Sizes & Window Behaviors
@@ -55,6 +62,28 @@ struct BehaviorSettingsView: View {
                         }
                     }
                 }
+
+
+                HStack {
+                    Text("Larger / Smaller")
+                    Spacer()
+                    Picker("", selection: $viewModel.sizeScalingMode) {
+                        Text("Percent").tag(SizeScalingMode.percentage)
+                        Text("Width (px)").tag(SizeScalingMode.widthPixels)
+                        Text("Height (px)").tag(SizeScalingMode.heightPixels)
+                        Text("Absolute (px)").tag(SizeScalingMode.absolutePixels)
+                    }
+                    .labelsHidden()
+                    .frame(width: 130)
+                    TextField("Amount", value: $viewModel.sizeScalingAmount, formatter: Self.sizeScalingFormatter)
+                        .labelsHidden()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 72)
+                        .accessibilityLabel("Larger / Smaller amount")
+                }
+                .help(viewModel.sizeScalingMode == .absolutePixels
+                      ? "Add or subtract this many pixels from both dimensions."
+                      : "The other dimension changes by the same proportion.")
                 
                 if viewModel.subsequentExecutionMode.resizes {
                     VStack(alignment: .leading, spacing: 8) {
@@ -145,6 +174,7 @@ struct BehaviorSettingsView: View {
                         Divider()
                         Toggle("Move cursor along with window across displays", isOn: $viewModel.moveCursorAcrossDisplays)
                         Toggle("Preserve maximize state when moving across displays", isOn: $viewModel.autoMaximize)
+                        Toggle("Switch to the destination Space after moving a window", isOn: $viewModel.followMovedWindowToSpace)
                         VStack(alignment: .leading, spacing: 2) {
                             Toggle("Center windows when moving across displays", isOn: $viewModel.centerAcrossDisplays)
                             Text("When off, window-to-screen edges are preserved where applicable.")

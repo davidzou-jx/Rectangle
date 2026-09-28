@@ -137,7 +137,11 @@ enum WindowAction: Int, Codable {
          displayEight = 127,
          displayNine = 128,
          tileRows = 129,
-         tileColumns = 130
+         tileColumns = 130,
+         nextSpace = 131,
+         prevSpace = 132,
+         switchNextSpace = 133,
+         switchPrevSpace = 134
 
     // Order matters here - it's used in the menu
     static let active = [leftHalf, rightHalf, centerHalf, topHalf, bottomHalf,
@@ -146,7 +150,7 @@ enum WindowAction: Int, Codable {
                          topVerticalThird, middleVerticalThird, bottomVerticalThird, topVerticalTwoThirds, bottomVerticalTwoThirds,
                          maximize, almostMaximize, maximizeHeight, larger, smaller, largerWidth, smallerWidth, largerHeight, smallerHeight,
                          center, centerProminently, restore,
-                         nextDisplay, previousDisplay,
+                         nextDisplay, previousDisplay, nextSpace, prevSpace, switchNextSpace, switchPrevSpace,
                          moveLeft, moveRight, moveUp, moveDown,
                          firstFourth, secondFourth, thirdFourth, lastFourth, firstThreeFourths, centerThreeFourths, lastThreeFourths,
                          topLeftSixth, topCenterSixth, topRightSixth, bottomLeftSixth, bottomCenterSixth, bottomRightSixth,
@@ -196,7 +200,7 @@ enum WindowAction: Int, Codable {
     // Determines where separators should be used in the menu
     var firstInGroup: Bool {
         switch self {
-        case .leftHalf, .topLeft, .firstThird, .maximize, .almostMaximize, .nextDisplay, .moveLeft, .firstFourth, .topLeftSixth, .topLeftEighth, .topLeftNinth, .topLeftTwelfth, .topLeftSixteenth, .tileRows:
+        case .leftHalf, .topLeft, .firstThird, .maximize, .almostMaximize, .nextDisplay, .nextSpace, .switchNextSpace, .moveLeft, .firstFourth, .topLeftSixth, .topLeftEighth, .topLeftNinth, .topLeftTwelfth, .topLeftSixteenth, .tileRows:
             return true
         default:
             return false
@@ -218,6 +222,10 @@ enum WindowAction: Int, Codable {
         case .maximizeHeight: return "maximizeHeight"
         case .previousDisplay: return "previousDisplay"
         case .nextDisplay: return "nextDisplay"
+        case .nextSpace: return "nextSpace"
+        case .prevSpace: return "prevSpace"
+        case .switchNextSpace: return "switchNextSpace"
+        case .switchPrevSpace: return "switchPrevSpace"
         case .larger: return "larger"
         case .smaller: return "smaller"
         case .bottomHalf: return "bottomHalf"
@@ -382,6 +390,14 @@ enum WindowAction: Int, Codable {
             String(localized: "Previous Display")
         case .nextDisplay:
             String(localized: "Next Display")
+        case .nextSpace:
+            String(localized: "Next Space")
+        case .prevSpace:
+            String(localized: "Previous Space")
+        case .switchNextSpace:
+            String(localized: "Switch to Next Space")
+        case .switchPrevSpace:
+            String(localized: "Switch to Previous Space")
         case .larger:
             String(localized: "Make Larger")
         case .smaller:
@@ -591,7 +607,7 @@ enum WindowAction: Int, Codable {
 
     var resizes: Bool {
         switch self {
-        case .center, .centerProminently, .nextDisplay, .previousDisplay,
+        case .center, .centerProminently, .nextDisplay, .previousDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine: return false
         case .moveUp, .moveDown, .moveLeft, .moveRight: return Defaults.resizeOnDirectionalMove.enabled
@@ -610,7 +626,7 @@ enum WindowAction: Int, Codable {
     
     var isDragSnappable: Bool {
         switch self {
-        case .restore, .previousDisplay, .nextDisplay, .moveUp, .moveDown, .moveLeft, .moveRight, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .larger, .smaller, .largerWidth, .smallerWidth, .cascadeActiveApp, .tileActiveApp,
+        case .restore, .previousDisplay, .nextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace, .moveUp, .moveDown, .moveLeft, .moveRight, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .larger, .smaller, .largerWidth, .smallerWidth, .cascadeActiveApp, .tileActiveApp,
             // Ninths
             .topLeftNinth, .topCenterNinth, .topRightNinth, .middleLeftNinth, .middleCenterNinth, .middleRightNinth, .bottomLeftNinth, .bottomCenterNinth, .bottomRightNinth,
             // Corner thirds
@@ -688,6 +704,10 @@ enum WindowAction: Int, Codable {
         case .maximizeHeight: return NSImage(imageLiteralResourceName: "maximizeHeightTemplate")
         case .previousDisplay: return NSImage(imageLiteralResourceName: "prevDisplayTemplate")
         case .nextDisplay: return NSImage(imageLiteralResourceName: "nextDisplayTemplate")
+        case .nextSpace: return NSImage(imageLiteralResourceName: "nextDisplayTemplate")
+        case .prevSpace: return NSImage(imageLiteralResourceName: "prevDisplayTemplate")
+        case .switchNextSpace: return NSImage(imageLiteralResourceName: "nextDisplayTemplate")
+        case .switchPrevSpace: return NSImage(imageLiteralResourceName: "prevDisplayTemplate")
         case .larger: return NSImage(imageLiteralResourceName: "makeLargerTemplate")
         case .smaller: return NSImage(imageLiteralResourceName: "makeSmallerTemplate")
         case .bottomHalf: return NSImage(imageLiteralResourceName: "bottomHalfTemplate")
@@ -852,7 +872,7 @@ enum WindowAction: Int, Codable {
             return Defaults.applyGapsToMaximize.userDisabled ? .none : .both;
         case .maximizeHeight:
             return Defaults.applyGapsToMaximizeHeight.userDisabled ? .none : .vertical;
-        case .almostMaximize, .previousDisplay, .nextDisplay, .larger, .smaller, .largerWidth, .smallerWidth, .largerHeight, .smallerHeight, .center, .centerProminently, .restore, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .cascadeActiveApp, .tileActiveApp,
+        case .almostMaximize, .previousDisplay, .nextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace, .larger, .smaller, .largerWidth, .smallerWidth, .largerHeight, .smallerHeight, .center, .centerProminently, .restore, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .cascadeActiveApp, .tileActiveApp,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine:
             return .none
@@ -865,7 +885,7 @@ enum WindowAction: Int, Codable {
              .larger, .smaller, .largerWidth, .smallerWidth, .largerHeight, .smallerHeight,
              .center, .centerProminently,
              .restore,
-             .nextDisplay, .previousDisplay,
+             .nextDisplay, .previousDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine,
              .moveLeft, .moveRight, .moveUp, .moveDown,
@@ -910,7 +930,7 @@ enum WindowAction: Int, Codable {
             return .thirds
         case .smaller, .larger, .smallerWidth, .largerWidth, .smallerHeight, .largerHeight:
             return .size
-        case .previousDisplay, .nextDisplay,
+        case .previousDisplay, .nextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine:
             return .display

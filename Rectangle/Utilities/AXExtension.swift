@@ -7,6 +7,7 @@ extension NSAccessibility.Attribute {
     static let windowIds = NSAccessibility.Attribute(rawValue: "AXWindowsIDs")
     static let minSize = NSAccessibility.Attribute(rawValue: "AXMinSize")
     static let minimumSize = NSAccessibility.Attribute(rawValue: "AXMinimumSize")
+    static let fullScreen = NSAccessibility.Attribute(rawValue: "AXFullScreen")
 }
 
 extension AXValue {
@@ -88,5 +89,17 @@ extension AXUIElement {
         let result = _AXUIElementGetWindow(self, &windowId)
         guard result == .success else { return nil }
         return windowId
+    }
+
+    func getActionNames() -> [String] {
+        var names: CFArray?
+        let result = AXUIElementCopyActionNames(self, &names)
+        guard result == .success, let names else { return [] }
+        return names as? [String] ?? []
+    }
+
+    @discardableResult
+    func performAction(_ action: String) -> Bool {
+        AXUIElementPerformAction(self, action as CFString) == .success
     }
 }

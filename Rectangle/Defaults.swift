@@ -37,6 +37,9 @@ class Defaults {
     static let minimumWindowWidth = DoubleDefault(key: "minimumWindowWidth", defaultValue: 0.25)
     static let minimumWindowHeight = DoubleDefault(key: "minimumWindowHeight", defaultValue: 0.25)
     static let sizeOffset = FloatDefault(key: "sizeOffset")
+    static let sizeScalingMode = IntEnumDefault<SizeScalingMode>(key: "sizeScalingMode", defaultValue: .percentage)
+    static let sizeScalePercent = FloatDefault(key: "sizeScalePercent", defaultValue: 5)
+    static let sizeScalePixels = FloatDefault(key: "sizeScalePixels", defaultValue: 30)
     static let widthStepSize = FloatDefault(key: "widthStepSize", defaultValue: 30)
     static let unsnapRestore = OptionalBoolDefault(key: "unsnapRestore")
     static let unsnapRestoreFromSizeChange = OptionalBoolDefault(key: "unsnapRestoreFromSizeChange")
@@ -92,6 +95,7 @@ class Defaults {
     static let verticalSplitRatio = FloatDefault(key: "verticalSplitRatio", defaultValue: 50)
     static let moveCursorAcrossDisplays = OptionalBoolDefault(key: "moveCursorAcrossDisplays")
     static let moveCursor = OptionalBoolDefault(key: "moveCursor")
+    static let followMovedWindowToSpace = OptionalBoolDefault(key: "followMovedWindowToSpace")
     static let autoMaximize = OptionalBoolDefault(key: "autoMaximize")
     static let applyGapsToMaximize = OptionalBoolDefault(key: "applyGapsToMaximize")
     static let applyGapsToMaximizeHeight = OptionalBoolDefault(key: "applyGapsToMaximizeHeight")
@@ -159,6 +163,9 @@ class Defaults {
         minimumWindowWidth,
         minimumWindowHeight,
         sizeOffset,
+        sizeScalingMode,
+        sizeScalePercent,
+        sizeScalePixels,
         widthStepSize,
         unsnapRestore,
         curtainChangeSize,
@@ -199,6 +206,7 @@ class Defaults {
         verticalSplitRatio,
         moveCursorAcrossDisplays,
         moveCursor,
+        followMovedWindowToSpace,
         autoMaximize,
         applyGapsToMaximize,
         applyGapsToMaximizeHeight,
