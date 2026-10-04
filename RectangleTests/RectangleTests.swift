@@ -16,6 +16,15 @@ class RectangleTests: XCTestCase {
 
 class WindowActionMenuTests: XCTestCase {
 
+    func testFocusNextDisplayIsAvailableWithoutMovingAWindow() {
+        let menu = makeMenu(showAdditional: false, showAllActions: false)
+        let item = menu.items.first { $0.representedObject as? WindowAction == .focusNextDisplay }
+        XCTAssertEqual(item?.title, "Focus Next Display")
+        XCTAssertEqual(WindowAction.focusNextDisplay.name, "focusNextDisplay")
+        XCTAssertFalse(WindowAction.focusNextDisplay.resizes)
+        XCTAssertFalse(WindowAction.focusNextDisplay.isDragSnappable)
+    }
+
     func testSpaceActionsAreAvailableAsTopLevelCommands() {
         let menu = makeMenu(showAdditional: false, showAllActions: false)
         let itemsByAction = Dictionary(uniqueKeysWithValues: menu.items.compactMap { item in
@@ -64,6 +73,97 @@ class WindowActionMenuTests: XCTestCase {
         delegate.mainStatusMenu = menu
         delegate.addWindowActionMenuItems(showAdditional: showAdditional, showAllActions: showAllActions)
         return menu
+    }
+}
+
+class DisplayFocusManagerTests: XCTestCase {
+
+    private final class TestScreen: NSScreen {
+        private let testFrame: CGRect
+
+        init(frame: CGRect) {
+            testFrame = frame
+            super.init()
+        }
+
+        override var frame: NSRect { testFrame }
+    }
+
+    private final class TestWindow: AccessibilityElement {
+        private let testFrame: CGRect
+
+        init(frame: CGRect) {
+            testFrame = frame
+            super.init(AXUIElementCreateSystemWide())
+        }
+
+        override var frame: CGRect { testFrame }
+    }
+
+    private final class TestScreenDetection: ScreenDetection {
+        private(set) var cursorDetections = 0
+
+        override func detectScreensAtCursor() -> UsableScreens? {
+            cursorDetections += 1
+            return nil
+        }
+    }
+
+    func testNextDisplayUsesActiveWindowIncludingWraparoundAndSpanningWindows() {
+        let left = TestScreen(frame: CGRect(x: -900, y: 0, width: 900, height: 600))
+        let middle = TestScreen(frame: CGRect(x: 0, y: 0, width: 900, height: 600))
+        let right = TestScreen(frame: CGRect(x: 900, y: 0, width: 900, height: 600))
+        let detection = TestScreenDetection(screens: { [right, left, middle] }, logicalFrame: { _ in nil })
+        let savedCursorDetection = Defaults.useCursorScreenDetection.toCodable()
+        defer { Defaults.useCursorScreenDetection.load(from: savedCursorDetection) }
+
+        let cases: [(CGRect, NSScreen)] = [
+            (left.frame.insetBy(dx: 100, dy: 100), middle),
+            (middle.frame.insetBy(dx: 100, dy: 100), right),
+            (right.frame.insetBy(dx: 100, dy: 100), left),
+            (CGRect(x: 700, y: 100, width: 700, height: 300), left)
+        ]
+        for useCursor in [false, true] {
+            Defaults.useCursorScreenDetection.enabled = useCursor
+            for (frame, destination) in cases {
+                let window = TestWindow(frame: frame.screenFlipped)
+                var cursorPositions: [CGPoint] = []
+                let manager = DisplayFocusManager(screenDetection: detection, frontWindowProvider: { window },
+                                                  warpCursor: { cursorPositions.append($0); return .failure })
+                manager.focusNextDisplay()
+                XCTAssertEqual(cursorPositions, [destination.frame.screenFlipped.centerPoint])
+            }
+        }
+        XCTAssertEqual(detection.cursorDetections, 0)
+    }
+
+    func testNoActiveWindowDoesNotMoveCursorOrChooseItsDisplay() {
+        let detection = TestScreenDetection()
+        var cursorPositions: [CGPoint] = []
+        let manager = DisplayFocusManager(screenDetection: detection, frontWindowProvider: { nil },
+                                          warpCursor: { cursorPositions.append($0); return .failure })
+        manager.focusNextDisplay()
+        XCTAssertTrue(cursorPositions.isEmpty)
+        XCTAssertEqual(detection.cursorDetections, 0)
+    }
+
+    func testSelectsFrontmostOrdinaryWindowCenteredOnDestinationDisplay() throws {
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let destination = screen.frame.screenFlipped
+        let inside = CGRect(x: destination.midX - 40, y: destination.midY - 40, width: 80, height: 80)
+        let outside = CGRect(x: destination.maxX + 10, y: destination.midY, width: 80, height: 80)
+        let windows = [
+            WindowInfo(id: 1, level: 20, frame: inside, pid: 1, processName: "Overlay"),
+            WindowInfo(id: 2, level: 0, frame: outside, pid: 2, processName: "Other Display"),
+            WindowInfo(id: 3, level: 0, frame: inside, pid: 3, processName: "Invisible", alpha: 0),
+            WindowInfo(id: 6, level: 0, frame: inside, pid: ProcessInfo.processInfo.processIdentifier,
+                       processName: "Rectangle"),
+            WindowInfo(id: 4, level: 0, frame: inside, pid: 4, processName: "Front"),
+            WindowInfo(id: 5, level: 0, frame: inside, pid: 5, processName: "Back")
+        ]
+
+        XCTAssertEqual(DisplayFocusManager.frontWindow(on: screen.frame, from: windows)?.id, 4)
+        XCTAssertNil(DisplayFocusManager.frontWindow(on: screen.frame, from: Array(windows.prefix(3))))
     }
 }
 

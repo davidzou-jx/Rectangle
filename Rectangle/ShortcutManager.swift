@@ -35,6 +35,7 @@ class ShortcutManager {
 
     let windowManager: WindowManager
     private let screenDetection: ScreenDetection
+    private let displayFocusManager: DisplayFocusManager
     private let spaceManager: SpaceActionExecuting
     private let spaceSwitcher: SpaceActionExecuting
     private let bindingStore: ShortcutBindingStore
@@ -76,6 +77,7 @@ class ShortcutManager {
     ) {
         self.windowManager = windowManager
         self.screenDetection = screenDetection
+        self.displayFocusManager = DisplayFocusManager(screenDetection: screenDetection)
         self.spaceManager = spaceManager
         self.spaceSwitcher = spaceSwitcher
         self.bindingStore = bindingStore
@@ -211,6 +213,11 @@ class ShortcutManager {
 
     private func execute(_ originalParameters: ExecutionParameters) {
         var parameters = originalParameters
+
+        if parameters.action == .focusNextDisplay {
+            displayFocusManager.focusNextDisplay()
+            return
+        }
 
         if spaceManager.execute(parameters: parameters) {
             return

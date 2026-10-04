@@ -348,7 +348,9 @@ extension AppDelegate: NSMenuDelegate {
             if frontmostWindow == nil && windowAction != .switchNextSpace && windowAction != .switchPrevSpace {
                 menuItem.isEnabled = false
             }
-            if windowAction == .nextDisplay || windowAction == .previousDisplay {
+            if windowAction == .focusNextDisplay {
+                menuItem.isHidden = screenCount == 1
+            } else if windowAction == .nextDisplay || windowAction == .previousDisplay {
                 menuItem.isHidden = screenCount == 1 || Defaults.combinedDisplayMode.userEnabled
             }
         }

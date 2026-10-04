@@ -65,6 +65,8 @@ At either end of a display's Space arrangement, switching farther in that direct
 
 Assign shortcuts to **Next Space** and **Previous Space** in Preferences > Shortcuts. On systems with the bridged SkyLight window-management operation, Rectangle moves the focused window to the adjacent normal Space on its display. With the destination switch enabled, it submits the window transfer alongside the final Space-switch gesture event to avoid a pause with the window absent from the current Space, then verifies both results. It does not require a draggable title bar or a running Yabai service. Rectangle must be allowed in System Settings > Privacy & Security > Accessibility for this feature to work.
 
+Assign a shortcut to **Focus Next Display** to focus the next display after the active window's display in Rectangle's display order, regardless of the pointer's position or the **Use cursor screen detection** setting. Rectangle moves the pointer to that display's center and, if an ordinary window is visible there, brings the frontmost one forward and activates its app. If no suitable window is visible, only the pointer moves; another press still chooses the destination from the active window. With no active window, the command does nothing.
+
 Each display has its own Space order. Trying to move beyond the first or last normal Space on the window's display leaves the window and displayed Space unchanged; the move command never chooses a Space on another display.
 
 In Preferences > General, turn off **Switch to the destination Space after moving a window** to move the window while staying on the current Space. This setting is on by default and requires the bridged move operation; the drag fallback cannot move a window without also switching Spaces.

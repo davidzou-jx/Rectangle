@@ -204,6 +204,7 @@
 		DCD3CF2993E9AFAF30820117 /* MiddleCenterRightTwelfthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF2AC59501448BD3BAA16EC /* MiddleCenterRightTwelfthCalculation.swift */; };
 		E791B00A88D90C24A4C3D2D1 /* UpperMiddleCenterLeftSixteenthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8CA6901E6FE134E930135B /* UpperMiddleCenterLeftSixteenthCalculation.swift */; };
 		F05220000000000000000002 /* WindowSizeWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = F05220000000000000000001 /* WindowSizeWarning.swift */; };
+		F0C051000000000000000002 /* DisplayFocusManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C051000000000000000001 /* DisplayFocusManager.swift */; };
 		F1AC0DE000000000000000A2 /* StackBadgeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AC0DE000000000000000A1 /* StackBadgeGeometry.swift */; };
 		F1AC0DE000000000000000A4 /* StackBadgeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AC0DE000000000000000A3 /* StackBadgeManager.swift */; };
 		F1AC0DE000000000000000A8 /* StackBadgeListPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AC0DE000000000000000A9 /* StackBadgeListPanel.swift */; };
@@ -448,6 +449,7 @@
 		D9FDCA1333C1BF6930A8D7F3 /* TopLeftTwelfthCalculation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopLeftTwelfthCalculation.swift; sourceTree = "<group>"; };
 		EEABF10E66D648DDB37DABBA /* MiddleLeftTwelfthCalculation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiddleLeftTwelfthCalculation.swift; sourceTree = "<group>"; };
 		F05220000000000000000001 /* WindowSizeWarning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSizeWarning.swift; sourceTree = "<group>"; };
+		F0C051000000000000000001 /* DisplayFocusManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayFocusManager.swift; sourceTree = "<group>"; };
 		F1AC0DE000000000000000A1 /* StackBadgeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackBadgeGeometry.swift; sourceTree = "<group>"; };
 		F1AC0DE000000000000000A3 /* StackBadgeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackBadgeManager.swift; sourceTree = "<group>"; };
 		F1AC0DE000000000000000A9 /* StackBadgeListPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackBadgeListPanel.swift; sourceTree = "<group>"; };
@@ -728,6 +730,7 @@
 				982470372EFA00010037B409 /* WindowActionCooperativeResize.swift */,
 				98A6EDEB2528FFC100F74B10 /* WindowActionCategory.swift */,
 				9824703822B0F37C0037B409 /* ShortcutManager.swift */,
+				F0C051000000000000000001 /* DisplayFocusManager.swift */,
 				F2A0CE000000000000000001 /* SpaceManager.swift */,
 				F2A0CE000000000000000003 /* SpaceGesture.swift */,
 				F2A0CE000000000000000005 /* SpaceDragTargetResolver.swift */,
@@ -1135,6 +1138,7 @@
 				9824704F22B189250037B409 /* BestEffortWindowMover.swift in Sources */,
 				30166BD024F27D6A00A38608 /* SpecifiedCalculation.swift in Sources */,
 				9824703922B0F37C0037B409 /* ShortcutManager.swift in Sources */,
+				F0C051000000000000000002 /* DisplayFocusManager.swift in Sources */,
 				F2A0CE000000000000000002 /* SpaceManager.swift in Sources */,
 				F2A0CE000000000000000004 /* SpaceGesture.swift in Sources */,
 				F2A0CE000000000000000006 /* SpaceDragTargetResolver.swift in Sources */,
