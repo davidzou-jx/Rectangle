@@ -449,13 +449,17 @@ class AccessibilityElement {
     }
     
     func bringToFront(force: Bool = false) {
-        _ = (windowElement ?? self).wrappedElement.performAction(kAXRaiseAction)
+        raiseWithoutActivating()
         if isMainWindow != true {
             isMainWindow = true
         }
         if let pid = pid, let app = NSRunningApplication(processIdentifier: pid), !app.isActive || force {
             app.activate()
         }
+    }
+
+    func raiseWithoutActivating() {
+        _ = (windowElement ?? self).wrappedElement.performAction(kAXRaiseAction)
     }
 }
 

@@ -59,15 +59,17 @@ The Todo window is excluded using the same rules as Rectangle's other multi-wind
 
 Assign shortcuts to **Switch to Next Space** and **Switch to Previous Space** in Preferences > Shortcuts to change the displayed Space without moving a window. These commands use Tinycast's three-phase synthetic trackpad gesture, including its macOS 27 event payload and Natural Scrolling handling, so the switch completes without the normal sliding transition. Overlapping shortcut presses are dropped while a switch is in progress. Accessibility permission is required.
 
-At either end of a display's Space arrangement, switching farther in that direction does nothing.
+At either end of a display's Space arrangement, switching farther in that direction does nothing. Space moves and switches share one operation, so overlapping commands are ignored until the move and its follow gesture have finished. Rectangle also ignores these commands while Mission Control is active or immediately after a Space change. Mouse, keyboard, or gesture input interrupts a pending synthetic switch and closes its gesture, and cancels any pending window-focus restoration.
 
 ### Move a window between Spaces
 
-Assign shortcuts to **Next Space** and **Previous Space** in Preferences > Shortcuts. On systems with the bridged SkyLight window-management operation, Rectangle moves the focused window to the adjacent normal Space on its display, verifies that the window arrived, and then switches that display to the destination Space. It does not require a draggable title bar or a running Yabai service. Rectangle must be allowed in System Settings > Privacy & Security > Accessibility for this feature to work.
+Assign shortcuts to **Next Space** and **Previous Space** in Preferences > Shortcuts. On systems with the bridged SkyLight window-management operation, Rectangle moves the focused window to the adjacent normal Space on its display. With the destination switch enabled, it submits the window transfer alongside the final Space-switch gesture event to avoid a pause with the window absent from the current Space, then verifies both results. It does not require a draggable title bar or a running Yabai service. Rectangle must be allowed in System Settings > Privacy & Security > Accessibility for this feature to work.
 
 Each display has its own Space order. Trying to move beyond the first or last normal Space on the window's display leaves the window and displayed Space unchanged; the move command never chooses a Space on another display.
 
 In Preferences > General, turn off **Switch to the destination Space after moving a window** to move the window while staying on the current Space. This setting is on by default and requires the bridged move operation; the drag fallback cannot move a window without also switching Spaces.
+
+After arrival, Rectangle raises the moved window above the destination Space's other ordinary windows and verifies that the order remains stable, retrying if macOS restores another window during the transition. With the destination switch enabled, it also restores keyboard focus to the moved window. With it disabled, it raises the background window without activating its app. Mouse, keyboard, or gesture input cancels these retries so you can choose another window.
 
 If the bridged operation is unavailable, Rectangle falls back to a verified title-bar drag while switching Spaces. On macOS 26.0 through 26.5, that fallback uses the standard Control-Fn-Arrow Space shortcuts instead of a Dock swipe to avoid a WindowServer rendering bug. Those system shortcuts must retain their default assignments on these releases.
 

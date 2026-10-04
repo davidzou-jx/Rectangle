@@ -20082,6 +20082,9 @@
         }
       }
     },
+    "Next Space" : {
+
+    },
     "Ninths" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -22052,6 +22055,9 @@
           }
         }
       }
+    },
+    "Previous Space" : {
+
     },
     "px" : {
       "localizations" : {
@@ -27863,6 +27869,12 @@
           }
         }
       }
+    },
+    "Switch to Next Space" : {
+
+    },
+    "Switch to Previous Space" : {
+
     },
     "Switch to the destination Space after moving a window" : {
       "localizations" : {

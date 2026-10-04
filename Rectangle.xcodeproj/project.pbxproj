@@ -76,11 +76,6 @@
 		9824703722B0F3200037B409 /* WindowAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703622B0F3200037B409 /* WindowAction.swift */; };
 		982470382EFA00010037B409 /* WindowActionCooperativeResize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982470372EFA00010037B409 /* WindowActionCooperativeResize.swift */; };
 		9824703922B0F37C0037B409 /* ShortcutManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703822B0F37C0037B409 /* ShortcutManager.swift */; };
-		F2A0CE000000000000000002 /* SpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000001 /* SpaceManager.swift */; };
-		F2A0CE000000000000000004 /* SpaceGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000003 /* SpaceGesture.swift */; };
-		F2A0CE000000000000000006 /* SpaceDragTargetResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000005 /* SpaceDragTargetResolver.swift */; };
-		F2A0CE000000000000000008 /* SpaceSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000007 /* SpaceSwitcher.swift */; };
-		F2A0CE00000000000000000A /* BridgedSpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000009 /* BridgedSpaceManager.swift */; };
 		9824703B22B139780037B409 /* CUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703A22B139780037B409 /* CUtil.swift */; };
 		9824703D22B13C7E0037B409 /* AccessibilityElement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703C22B13C7E0037B409 /* AccessibilityElement.swift */; };
 		9824703F22B13FBC0037B409 /* ScreenDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703E22B13FBC0037B409 /* ScreenDetection.swift */; };
@@ -214,6 +209,12 @@
 		F1AC0DE000000000000000A8 /* StackBadgeListPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AC0DE000000000000000A9 /* StackBadgeListPanel.swift */; };
 		F1AC0DE000000000000000AA /* StackBadgeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AC0DE000000000000000AB /* StackBadgeRowView.swift */; };
 		F1AC0DE000000000000000C2 /* OverlapOffsetGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AC0DE000000000000000C1 /* OverlapOffsetGeometry.swift */; };
+		F2A0CE000000000000000002 /* SpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000001 /* SpaceManager.swift */; };
+		F2A0CE000000000000000004 /* SpaceGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000003 /* SpaceGesture.swift */; };
+		F2A0CE000000000000000006 /* SpaceDragTargetResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000005 /* SpaceDragTargetResolver.swift */; };
+		F2A0CE000000000000000008 /* SpaceSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000007 /* SpaceSwitcher.swift */; };
+		F2A0CE00000000000000000A /* BridgedSpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000009 /* BridgedSpaceManager.swift */; };
+		F2A0CE00000000000000000C /* SpaceOperationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE00000000000000000B /* SpaceOperationCoordinator.swift */; };
 		F4EED30B47FB6C55EA937254 /* TopRightTwelfthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8357E928530D10A806F3CD /* TopRightTwelfthCalculation.swift */; };
 		F51A7467767F8EAF97321A00 /* TopRightSixteenthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD222258713B13274FB651B0 /* TopRightSixteenthCalculation.swift */; };
 		F7B6C43BB57F8064F49DDBB6 /* BottomLeftSixteenthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEE147786B2CD7350FAFB700 /* BottomLeftSixteenthCalculation.swift */; };
@@ -321,11 +322,6 @@
 		9824703622B0F3200037B409 /* WindowAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowAction.swift; sourceTree = "<group>"; };
 		982470372EFA00010037B409 /* WindowActionCooperativeResize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowActionCooperativeResize.swift; sourceTree = "<group>"; };
 		9824703822B0F37C0037B409 /* ShortcutManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutManager.swift; sourceTree = "<group>"; };
-		F2A0CE000000000000000001 /* SpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceManager.swift; sourceTree = "<group>"; };
-		F2A0CE000000000000000003 /* SpaceGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceGesture.swift; sourceTree = "<group>"; };
-		F2A0CE000000000000000005 /* SpaceDragTargetResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceDragTargetResolver.swift; sourceTree = "<group>"; };
-		F2A0CE000000000000000007 /* SpaceSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSwitcher.swift; sourceTree = "<group>"; };
-		F2A0CE000000000000000009 /* BridgedSpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgedSpaceManager.swift; sourceTree = "<group>"; };
 		9824703A22B139780037B409 /* CUtil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CUtil.swift; sourceTree = "<group>"; };
 		9824703C22B13C7E0037B409 /* AccessibilityElement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityElement.swift; sourceTree = "<group>"; };
 		9824703E22B13FBC0037B409 /* ScreenDetection.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ScreenDetection.swift; sourceTree = "<group>"; };
@@ -457,6 +453,12 @@
 		F1AC0DE000000000000000A9 /* StackBadgeListPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackBadgeListPanel.swift; sourceTree = "<group>"; };
 		F1AC0DE000000000000000AB /* StackBadgeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackBadgeRowView.swift; sourceTree = "<group>"; };
 		F1AC0DE000000000000000C1 /* OverlapOffsetGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlapOffsetGeometry.swift; sourceTree = "<group>"; };
+		F2A0CE000000000000000001 /* SpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceManager.swift; sourceTree = "<group>"; };
+		F2A0CE000000000000000003 /* SpaceGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceGesture.swift; sourceTree = "<group>"; };
+		F2A0CE000000000000000005 /* SpaceDragTargetResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceDragTargetResolver.swift; sourceTree = "<group>"; };
+		F2A0CE000000000000000007 /* SpaceSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSwitcher.swift; sourceTree = "<group>"; };
+		F2A0CE000000000000000009 /* BridgedSpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgedSpaceManager.swift; sourceTree = "<group>"; };
+		F2A0CE00000000000000000B /* SpaceOperationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceOperationCoordinator.swift; sourceTree = "<group>"; };
 		F3592F8E85CE82B8FA662A31 /* TwelfthsRepeated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwelfthsRepeated.swift; sourceTree = "<group>"; };
 		FA34D0FE2F7E896E00EEBEF1 /* SpecificDisplayCalculation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecificDisplayCalculation.swift; sourceTree = "<group>"; };
 		FD222258713B13274FB651B0 /* TopRightSixteenthCalculation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopRightSixteenthCalculation.swift; sourceTree = "<group>"; };
@@ -731,6 +733,7 @@
 				F2A0CE000000000000000005 /* SpaceDragTargetResolver.swift */,
 				F2A0CE000000000000000007 /* SpaceSwitcher.swift */,
 				F2A0CE000000000000000009 /* BridgedSpaceManager.swift */,
+				F2A0CE00000000000000000B /* SpaceOperationCoordinator.swift */,
 				9824703C22B13C7E0037B409 /* AccessibilityElement.swift */,
 				9824703E22B13FBC0037B409 /* ScreenDetection.swift */,
 				98C275662322E2DA009B9292 /* WindowHistory.swift */,
@@ -1137,6 +1140,7 @@
 				F2A0CE000000000000000006 /* SpaceDragTargetResolver.swift in Sources */,
 				F2A0CE000000000000000008 /* SpaceSwitcher.swift in Sources */,
 				F2A0CE00000000000000000A /* BridgedSpaceManager.swift in Sources */,
+				F2A0CE00000000000000000C /* SpaceOperationCoordinator.swift in Sources */,
 				98D16A492592B460005228CB /* NotificationExtension.swift in Sources */,
 				AA0AC000291C1B5E00D125D2 /* CGExtension.swift in Sources */,
 				BB0B80492EFB0AF900A9B165 /* TopVerticalTwoThirdsCalculation.swift in Sources */,

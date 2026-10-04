@@ -6,6 +6,16 @@ let spaceMoveSyntheticEventTag: Int64 = 0x5245_4354_5350_4345
 
 protocol SpaceActionExecuting {
     func execute(parameters: ExecutionParameters) -> Bool
+    func execute(parameters: ExecutionParameters, continuing operation: SpaceOperationCoordinator.Operation?) -> Bool
+    var isSpaceActionInProgress: Bool { get }
+}
+
+extension SpaceActionExecuting {
+    func execute(parameters: ExecutionParameters, continuing operation: SpaceOperationCoordinator.Operation?) -> Bool {
+        execute(parameters: parameters)
+    }
+
+    var isSpaceActionInProgress: Bool { false }
 }
 
 enum SpaceSwitchingMethod: Int {
@@ -50,7 +60,7 @@ final class SpacePhysicalInputMonitor: SpacePhysicalInputMonitoring {
             .leftMouseDown, .leftMouseUp, .leftMouseDragged,
             .rightMouseDown, .rightMouseUp, .rightMouseDragged,
             .otherMouseDown, .otherMouseUp, .otherMouseDragged,
-            .scrollWheel
+            .scrollWheel, .keyDown, .swipe, .gesture, .beginGesture, .endGesture
         ]
         let handle: (NSEvent) -> Void = { event in
             guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != spaceMoveSyntheticEventTag else {
@@ -402,6 +412,19 @@ struct SpaceWindowSnapshot: Equatable {
     let frame: CGRect
     let level: CGWindowLevel
     let isOnScreen: Bool
+
+    static func current(for window: AccessibilityElement) -> SpaceWindowSnapshot? {
+        guard let windowID = window.windowId,
+              let infos = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+              let info = infos.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID }),
+              let bounds = info[kCGWindowBounds as String] as? [String: Any],
+              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+              let level = info[kCGWindowLayer as String] as? NSNumber else { return nil }
+        return SpaceWindowSnapshot(windowId: windowID,
+                                   pid: (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                                   frame: frame, level: level.int32Value,
+                                   isOnScreen: info[kCGWindowIsOnscreen as String] as? Bool ?? false)
+    }
 }
 
 typealias SpaceWindowSnapshotProvider = (AccessibilityElement) -> SpaceWindowSnapshot?
@@ -414,6 +437,7 @@ final class SpaceManager: SpaceActionExecuting {
         case postingGesture
         case awaitingSpaceChange
         case confirmingWindow
+        case confirmingOrder
     }
 
     private let eventPoster: SpaceMoveEventPosting
@@ -430,6 +454,12 @@ final class SpaceManager: SpaceActionExecuting {
     private let probeObservationDelay: TimeInterval
     private let windowStabilityPollDelay: TimeInterval
     private let releaseTimeout: TimeInterval
+    private let coordinator: SpaceOperationCoordinator
+    private let raiseWindow: (AccessibilityElement) -> Void
+    private let windowIsFrontmost: (CGWindowID, String) -> Bool?
+    private var operation: SpaceOperationCoordinator.Operation?
+
+    var isSpaceActionInProgress: Bool { moveInProgress }
 
     private var state = State.idle
     private var moveInProgress = false
@@ -478,7 +508,10 @@ final class SpaceManager: SpaceActionExecuting {
         mouseDownRecognitionDelay: TimeInterval = 0.035,
         probeObservationDelay: TimeInterval = 0.025,
         windowStabilityPollDelay: TimeInterval = 0.04,
-        releaseTimeout: TimeInterval = 1.5
+        releaseTimeout: TimeInterval = 1.5,
+        coordinator: SpaceOperationCoordinator = .shared,
+        raiseWindow: @escaping (AccessibilityElement) -> Void = { $0.bringToFront(force: true) },
+        windowIsFrontmost: ((CGWindowID, String) -> Bool?)? = nil
     ) {
         self.eventPoster = eventPoster
         self.physicalInputMonitor = physicalInputMonitor
@@ -494,11 +527,21 @@ final class SpaceManager: SpaceActionExecuting {
         self.probeObservationDelay = probeObservationDelay
         self.windowStabilityPollDelay = windowStabilityPollDelay
         self.releaseTimeout = releaseTimeout
+        self.coordinator = coordinator
+        self.raiseWindow = raiseWindow
+        self.windowIsFrontmost = windowIsFrontmost ?? { windowID, displayIdentifier in
+            SpaceWindowOrder.isFrontmost(windowID: windowID,
+                                        in: WindowUtil.getWindowList(forceRefresh: true)) { candidate in
+                SkyLightSpaceNeighborChecker.shared.displayIdentifier(for: candidate)
+                    .map { $0 == displayIdentifier }
+            }
+        }
     }
 
     deinit {
         physicalInputMonitor.stop()
         removeSpaceChangeObserver()
+        endInterruptedGesture()
         if mouseDownPosted {
             let currentMouseLocation = eventPoster.mouseLocation
             _ = eventPoster.postMouseUp(at: currentMouseLocation ?? dragPoint ?? .zero)
@@ -515,6 +558,10 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     func execute(parameters: ExecutionParameters) -> Bool {
+        execute(parameters: parameters, continuing: nil)
+    }
+
+    func execute(parameters: ExecutionParameters, continuing operation: SpaceOperationCoordinator.Operation?) -> Bool {
         guard let direction = SpaceDirection(action: parameters.action) else {
             return false
         }
@@ -523,6 +570,8 @@ final class SpaceManager: SpaceActionExecuting {
             Logger.log("Ignoring Space move while another Space move is in progress")
             return true
         }
+
+        guard let operation = coordinator.begin(continuing: operation) else { return true }
 
         guard eventPoster.accessibilityAuthorized else {
             fail("Accessibility permission is required to move a window between Spaces")
@@ -583,6 +632,7 @@ final class SpaceManager: SpaceActionExecuting {
         let currentExecutionID = executionID
         state = .probing
         moveInProgress = true
+        self.operation = operation
         mouseDownPosted = false
         gestureStarted = false
         gestureEnded = false
@@ -644,6 +694,10 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func attemptCandidate(executionID: UInt64) {
+        guard coordinator.canContinue else {
+            finish(executionID: executionID, restoreCursor: true, succeeded: false)
+            return
+        }
         guard isActive(executionID),
               let direction,
               let window = targetWindow,
@@ -707,7 +761,7 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func beginProbe(executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled else {
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue else {
             finish(executionID: executionID, restoreCursor: false, succeeded: false)
             return
         }
@@ -841,7 +895,7 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func postGesturePhase(at index: Int, executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled,
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue,
               SpaceGesturePhase.allCases.indices.contains(index)
         else {
             if isActive(executionID) {
@@ -849,12 +903,14 @@ final class SpaceManager: SpaceActionExecuting {
             }
             return
         }
-        gestureStarted = true
-        guard eventPoster.postGesturePhase(SpaceGesturePhase.allCases[index]) else {
+        let phase = SpaceGesturePhase.allCases[index]
+        guard eventPoster.postGesturePhase(phase) else {
             Logger.log("Unable to post a Space gesture phase")
             finish(executionID: executionID, restoreCursor: true, succeeded: false)
             return
         }
+        if phase == .began { gestureStarted = true }
+        if phase == .ended { gestureEnded = true }
 
         let nextIndex = index + 1
         guard SpaceGesturePhase.allCases.indices.contains(nextIndex) else {
@@ -890,7 +946,7 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func beginWindowConfirmation(executionID: UInt64) {
-        guard isActive(executionID), state != .confirmingWindow else { return }
+        guard isActive(executionID), state != .confirmingWindow, state != .confirmingOrder else { return }
         state = .confirmingWindow
         lastStableFrame = nil
         stableFrameCount = 0
@@ -900,7 +956,7 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func confirmWindowStable(executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled, let targetWindow else {
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue, let targetWindow else {
             finish(executionID: executionID, restoreCursor: false, succeeded: false)
             return
         }
@@ -924,7 +980,14 @@ final class SpaceManager: SpaceActionExecuting {
             stableFrameCount = 1
         }
         if stableFrameCount >= 2 {
-            finish(executionID: executionID, restoreCursor: true, succeeded: true)
+            // Let go before activating the destination window. Keep observing
+            // physical input until its focus and stacking order have settled.
+            if mouseDownPosted {
+                _ = eventPoster.postMouseUp(at: eventPoster.mouseLocation ?? dragPoint ?? .zero)
+                mouseDownPosted = false
+            }
+            state = .confirmingOrder
+            confirmWindowOrder(poll: 0, stablePolls: 0, executionID: executionID)
         } else {
             scheduler(windowStabilityPollDelay) { [weak self] in
                 self?.confirmWindowStable(executionID: executionID)
@@ -932,9 +995,51 @@ final class SpaceManager: SpaceActionExecuting {
         }
     }
 
+    private func confirmWindowOrder(poll: Int, stablePolls: Int, executionID: UInt64) {
+        guard isActive(executionID) else { return }
+        guard cursorStillControlled, coordinator.canContinue,
+              let targetWindow, let trackedWindowId, let sourceDisplayIdentifier,
+              targetWindow.windowId == trackedWindowId,
+              targetWindow.isMinimized != true, targetWindow.isFullScreen != true,
+              targetWindow.isSheet != true, targetWindow.isModal != true,
+              windowDisplayIdentifier(trackedWindowId) == sourceDisplayIdentifier
+        else {
+            finish(executionID: executionID, restoreCursor: false, succeeded: false)
+            return
+        }
+        var nextStablePolls = 0
+        if let snapshot = windowSnapshotProvider(targetWindow) {
+            guard snapshot.windowId == trackedWindowId, snapshot.level == 0 else {
+                finish(executionID: executionID, restoreCursor: true, succeeded: false)
+                return
+            }
+            if snapshot.isOnScreen {
+                if poll > 0, windowIsFrontmost(trackedWindowId, sourceDisplayIdentifier) == true,
+                   frontWindowProvider()?.windowId == trackedWindowId {
+                    nextStablePolls = stablePolls + 1
+                    if nextStablePolls >= 3 {
+                        finish(executionID: executionID, restoreCursor: true, succeeded: true)
+                        return
+                    }
+                } else {
+                    raiseWindow(targetWindow)
+                }
+            }
+        }
+        guard poll < 20 else {
+            fail("Moved window's destination stacking order could not be confirmed")
+            finish(executionID: executionID, restoreCursor: true, succeeded: false)
+            return
+        }
+        scheduler(windowStabilityPollDelay) { [weak self] in
+            self?.confirmWindowOrder(poll: poll + 1, stablePolls: nextStablePolls, executionID: executionID)
+        }
+    }
+
     private func finish(executionID: UInt64, restoreCursor: Bool, succeeded: Bool) {
         guard isActive(executionID) else { return }
 
+        endInterruptedGesture()
         let currentMouseLocation = eventPoster.mouseLocation
         if mouseDownPosted {
             _ = eventPoster.postMouseUp(at: currentMouseLocation ?? dragPoint ?? .zero)
@@ -978,6 +1083,15 @@ final class SpaceManager: SpaceActionExecuting {
         probePoint = nil
         expectedMouseLocation = nil
         moveInProgress = false
+        operation = nil
+    }
+
+    private func endInterruptedGesture() {
+        guard gestureStarted, !gestureEnded else { return }
+        // End Dock's gesture before releasing the held window and discarding
+        // the prepared events, including cancellation between paced phases.
+        _ = eventPoster.postGesturePhase(.ended)
+        gestureEnded = true
     }
 
     private func isActive(_ candidateExecutionID: UInt64) -> Bool {

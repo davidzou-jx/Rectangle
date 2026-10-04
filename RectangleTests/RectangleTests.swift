@@ -103,9 +103,48 @@ class GridLimitDefaultsTests: XCTestCase {
     }
 }
 
+class SpaceOperationCoordinatorTests: XCTestCase {
+    func testOnlyTheOwningMoveCanContinueItsOperation() throws {
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        var operation = try XCTUnwrap(coordinator.begin())
+        XCTAssertNil(coordinator.begin())
+        XCTAssertTrue(coordinator.begin(continuing: operation) === operation)
+        let other = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        XCTAssertNil(other.begin(continuing: operation))
+        // A child retains the same lease until both move and gesture finish.
+        var child: SpaceOperationCoordinator.Operation? = operation
+        operation = try XCTUnwrap(other.begin())
+        XCTAssertNil(coordinator.begin())
+        child = nil
+        XCTAssertNotNil(coordinator.begin())
+        withExtendedLifetime((operation, child)) {}
+    }
+
+    func testMissionControlBlocksNewAndInheritedOperations() throws {
+        var safe = true
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { safe }, workspaceNotificationCenter: NotificationCenter())
+        let operation = try XCTUnwrap(coordinator.begin())
+        safe = false
+        XCTAssertFalse(coordinator.canContinue)
+        XCTAssertNil(coordinator.begin(continuing: operation))
+        XCTAssertNil(coordinator.begin())
+    }
+
+    func testNativeSpaceChangesHaveASettlingPeriod() {
+        var now: TimeInterval = 1
+        let notifications = NotificationCenter()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, clock: { now }, workspaceNotificationCenter: notifications)
+        notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        XCTAssertNil(coordinator.begin())
+        now += 0.2
+        XCTAssertNotNil(coordinator.begin())
+    }
+}
+
 class SpaceManagerTests: XCTestCase {
 
     private final class TestElement: AccessibilityElement {
+        var testWindowID: CGWindowID? = 42
         let testTitleBarFrame: CGRect?
         let testBundleIdentifier: String?
         var testFrame: CGRect
@@ -125,6 +164,7 @@ class SpaceManagerTests: XCTestCase {
         }
 
         override var titleBarFrame: CGRect? { testTitleBarFrame }
+        override var windowId: CGWindowID? { testWindowID }
         override var bundleIdentifier: String? { testBundleIdentifier }
         override var frame: CGRect { testFrame }
         override var pid: pid_t? { 42 }
@@ -303,7 +343,10 @@ class SpaceManagerTests: XCTestCase {
         snapshotProvider: SpaceWindowSnapshotProvider? = nil,
         neighborAvailable: @escaping (SpaceDirection, CGPoint) -> Bool? = { _, _ in true },
         displayIdentifierAtPoint: @escaping (CGPoint) -> String? = { _ in "display" },
-        windowDisplayIdentifier: @escaping (CGWindowID) -> String? = { _ in "display" }
+        windowDisplayIdentifier: @escaping (CGWindowID) -> String? = { _ in "display" },
+        coordinator: SpaceOperationCoordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+        raise: @escaping (AccessibilityElement) -> Void = { _ in },
+        frontmost: @escaping (CGWindowID, String) -> Bool? = { _, _ in true }
     ) -> SpaceManager {
         let testWindow = window as? TestElement
         let originalFrame = testWindow?.testFrame
@@ -336,7 +379,8 @@ class SpaceManagerTests: XCTestCase {
             neighborAvailable: neighborAvailable,
             displayIdentifierAtPoint: displayIdentifierAtPoint,
             windowDisplayIdentifier: windowDisplayIdentifier,
-            workspaceNotificationCenter: notificationCenter
+            workspaceNotificationCenter: notificationCenter,
+            coordinator: coordinator, raiseWindow: raise, windowIsFrontmost: frontmost
         )
     }
 
@@ -427,7 +471,7 @@ class SpaceManagerTests: XCTestCase {
         XCTAssertEqual(poster.phases, [.began, .changed, .ended])
         XCTAssertEqual(poster.dragPhases, [.outward, .back])
         notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
-        scheduler.runUntil { poster.mouseUpPoints.count == 1 }
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
 
         XCTAssertEqual(poster.mouseUpPoints, [dragPoint])
         XCTAssertEqual(poster.warps, [dragPoint, originalCursor])
@@ -458,6 +502,50 @@ class SpaceManagerTests: XCTestCase {
 
         scheduler.runNext()
         XCTAssertEqual(poster.phases, [.began, .changed, .ended])
+    }
+
+    func testDragReleasesBeforeRaisingAndRetriesUntilDestinationOrderIsStable() {
+        let window = TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30))
+        let poster = EventPosterSpy(mouseLocation: .zero)
+        let scheduler = SchedulerSpy()
+        let notifications = NotificationCenter()
+        var frontmost = false
+        var raises = 0
+        let manager = manager(poster: poster, scheduler: scheduler, window: window,
+                              notificationCenter: notifications, raise: { _ in
+            XCTAssertEqual(poster.mouseUpPoints.count, 1)
+            raises += 1
+            if raises == 2 { frontmost = true }
+        }, frontmost: { _, _ in frontmost })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { poster.phases == [.began, .changed, .ended] }
+        notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(raises, 2)
+        XCTAssertEqual(poster.mouseUpPoints.count, 1)
+        XCTAssertEqual(poster.warps.last, .zero)
+    }
+
+    func testUserInputAfterDragReleaseCancelsDestinationRaiseRetries() {
+        let window = TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30))
+        let poster = EventPosterSpy(mouseLocation: .zero)
+        let scheduler = SchedulerSpy()
+        let notifications = NotificationCenter()
+        let input = PhysicalInputMonitorSpy()
+        var raises = 0
+        let manager = manager(poster: poster, scheduler: scheduler, window: window,
+                              notificationCenter: notifications, physicalInputMonitor: input,
+                              raise: { _ in raises += 1 }, frontmost: { _, _ in false })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { poster.phases == [.began, .changed, .ended] }
+        notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        scheduler.runUntil { raises == 1 }
+        input.trigger()
+        scheduler.runNext()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertEqual(raises, 1)
+        XCTAssertEqual(poster.mouseUpPoints.count, 1)
+        XCTAssertNotEqual(poster.warps.last, .zero)
     }
 
     func testTimeoutAlwaysReleasesDragAndAllowsAnotherMove() {
@@ -529,9 +617,56 @@ class SpaceManagerTests: XCTestCase {
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.prevSpace)))
         scheduler.runUntil { poster.mouseUpPoints.count == 1 }
 
-        XCTAssertEqual(poster.phases, [.began, .changed])
+        XCTAssertEqual(poster.phases, [.began, .changed, .ended])
         XCTAssertEqual(poster.mouseUpPoints.count, 1)
         XCTAssertEqual(poster.discardCount, 1)
+    }
+
+    func testPhysicalInputAfterGestureBeganClosesGestureBeforeReleasingDrag() {
+        let poster = EventPosterSpy(mouseLocation: .zero)
+        poster.gesturePhaseDelay = 0.01
+        let scheduler = SchedulerSpy()
+        let monitor = PhysicalInputMonitorSpy()
+        let manager = manager(poster: poster, scheduler: scheduler,
+                              window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)),
+                              physicalInputMonitor: monitor)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { poster.phases == [.began] }
+        monitor.trigger()
+        XCTAssertEqual(poster.phases, [.began, .ended])
+        XCTAssertEqual(poster.mouseUpPoints.count, 1)
+        scheduler.runNext()
+        XCTAssertEqual(poster.phases, [.began, .ended])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testDeinitClosesAnUnfinishedDragGesture() {
+        let poster = EventPosterSpy(mouseLocation: .zero)
+        poster.gesturePhaseDelay = 0.01
+        let scheduler = SchedulerSpy()
+        var manager: SpaceManager? = manager(poster: poster, scheduler: scheduler,
+                                              window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)))
+        XCTAssertTrue(manager!.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { poster.phases == [.began] }
+        manager = nil
+        XCTAssertEqual(poster.phases, [.began, .ended])
+        XCTAssertEqual(poster.mouseUpPoints.count, 1)
+    }
+
+    func testDragDoesNotStartDuringMissionControlOrAnotherSpaceOperation() throws {
+        for missionControl in [true, false] {
+            let coordinator = SpaceOperationCoordinator(environmentIsSafe: { !missionControl }, workspaceNotificationCenter: NotificationCenter())
+            let operation = missionControl ? nil : try XCTUnwrap(coordinator.begin())
+            let poster = EventPosterSpy(mouseLocation: .zero)
+            let scheduler = SchedulerSpy()
+            let manager = manager(poster: poster, scheduler: scheduler,
+                                  window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)),
+                                  coordinator: coordinator)
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+            XCTAssertTrue(poster.prepared.isEmpty)
+            XCTAssertEqual(poster.mouseDownCount, 0)
+            withExtendedLifetime(operation) {}
+        }
     }
 
     func testPreparationFailureDoesNotMoveCursorOrPressMouse() {
@@ -652,6 +787,7 @@ class SpaceManagerTests: XCTestCase {
 
         notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         scheduler.runUntil { poster.mouseUpPoints.count == 2 }
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
 
         XCTAssertEqual(resolver.recorded, [resolver.targets[1]])
     }
@@ -680,6 +816,7 @@ class SpaceManagerTests: XCTestCase {
 
     func testEarlySpaceChangeWaitsForGestureEndAndStableDestinationWindow() {
         let window = TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30))
+        window.testWindowID = 12
         let poster = EventPosterSpy(mouseLocation: .zero)
         poster.gesturePhaseDelay = 0.01
         let scheduler = SchedulerSpy()
@@ -769,10 +906,12 @@ class SpaceManagerTests: XCTestCase {
         let scheduler = SchedulerSpy()
         let notifications = NotificationCenter()
         let resolver = DragResolverSpy(points: [CGPoint(x: 200, y: 115)])
+        let window = TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30))
+        window.testWindowID = nil
         let manager = manager(
             poster: poster,
             scheduler: scheduler,
-            window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)),
+            window: window,
             notificationCenter: notifications,
             resolver: resolver,
             snapshotProvider: { element in
@@ -814,13 +953,18 @@ class SpaceManagerTests: XCTestCase {
 
 class BridgedSpaceManagerTests: XCTestCase {
     private final class TestWindow: AccessibilityElement {
-        override var windowId: CGWindowID? { 101 }
-        override var frame: CGRect { CGRect(x: 100, y: 100, width: 500, height: 300) }
-        override var isSheet: Bool? { false }
-        override var isModal: Bool? { false }
-        override var isMinimized: Bool? { false }
-        override var isFullScreen: Bool? { false }
-
+        var testWindowID: CGWindowID = 101
+        var testFrame = CGRect(x: 100, y: 100, width: 500, height: 300)
+        var minimized = false
+        var fullscreen = false
+        var sheet = false
+        var modal = false
+        override var windowId: CGWindowID? { testWindowID }
+        override var frame: CGRect { testFrame }
+        override var isSheet: Bool? { sheet }
+        override var isModal: Bool? { modal }
+        override var isMinimized: Bool? { minimized }
+        override var isFullScreen: Bool? { fullscreen }
         init() { super.init(AXUIElementCreateSystemWide()) }
     }
 
@@ -828,6 +972,7 @@ class BridgedSpaceManagerTests: XCTestCase {
         var isAvailable = true
         var memberships: [UInt64]? = [57]
         var displayedSpace: UInt64? = 57
+        var moveResult = true
         var adjacent: AdjacentManagedSpace? = AdjacentManagedSpace(
             sourceID: 57, destinationID: 10, displayIdentifier: "secondary"
         )
@@ -838,19 +983,474 @@ class BridgedSpaceManagerTests: XCTestCase {
                            direction: SpaceDirection) -> AdjacentManagedSpace? {
             adjacent
         }
-        func currentSpace(for displayIdentifier: String) -> UInt64? { displayedSpace }
+        func currentSpace(for displayIdentifier: String) -> UInt64? {
+            displayedSpace
+        }
         func move(windowID: CGWindowID, to spaceID: UInt64) -> Bool {
             events.append("move:\(windowID):\(spaceID)")
-            return true
+            return moveResult
         }
     }
 
-    private final class SwitchSpy: SpaceActionExecuting {
+    private final class InputMonitorSpy: SpacePhysicalInputMonitoring {
+        var handler: (() -> Void)?
+        func start(_ handler: @escaping () -> Void) { self.handler = handler }
+        func stop() { handler = nil }
+        func trigger() { handler?() }
+    }
+
+    private final class SwitchSpy: DisplaySpaceSwitching {
+        var isSpaceActionInProgress = false
+        weak var receivedOperation: SpaceOperationCoordinator.Operation?
+        var defersCommit = false
+        var acceptsSwitch = true
+        private var beforeSwitch: (() -> Void)?
         let transfer: TransferSpy
         init(transfer: TransferSpy) { self.transfer = transfer }
         func execute(parameters: ExecutionParameters) -> Bool {
             transfer.events.append("switch:\(parameters.action.name)")
             return true
+        }
+        func execute(parameters: ExecutionParameters, continuing operation: SpaceOperationCoordinator.Operation?) -> Bool {
+            execute(parameters: parameters, continuing: operation, beforeSwitch: nil)
+        }
+        func execute(parameters: ExecutionParameters,
+                     continuing operation: SpaceOperationCoordinator.Operation?,
+                     beforeSwitch: (() -> Void)?) -> Bool {
+            guard acceptsSwitch else { return true }
+            receivedOperation = operation
+            _ = execute(parameters: parameters)
+            if defersCommit {
+                isSpaceActionInProgress = true
+                self.beforeSwitch = beforeSwitch
+            } else {
+                beforeSwitch?()
+            }
+            return true
+        }
+        func commit() {
+            let action = beforeSwitch
+            beforeSwitch = nil
+            action?()
+        }
+        func finish() {
+            beforeSwitch = nil
+            isSpaceActionInProgress = false
+        }
+    }
+
+    private final class MoveScheduler {
+        var actions = [() -> Void]()
+        func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) { actions.append(action) }
+        func runNext() {
+            guard !actions.isEmpty else { return XCTFail("Expected a Space move callback") }
+            actions.removeFirst()()
+        }
+        func runUntil(_ condition: () -> Bool, limit: Int = 60) {
+            for _ in 0..<limit {
+                if condition() { return }
+                runNext()
+            }
+            XCTFail("Space move did not finish")
+        }
+    }
+
+    private func makeManager(transfer: TransferSpy, window: TestWindow, scheduler: MoveScheduler,
+                             switcher: SwitchSpy? = nil,
+                             coordinator: SpaceOperationCoordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                             input: InputMonitorSpy = InputMonitorSpy(),
+                             focusedWindow: (() -> AccessibilityElement?)? = nil,
+                             snapshot: SpaceWindowSnapshotProvider? = nil,
+                             raise: ((AccessibilityElement, Bool) -> Void)? = nil,
+                             frontmost: @escaping (CGWindowID, AdjacentManagedSpace) -> Bool? = { _, _ in true },
+                             follow: @escaping () -> Bool = { true }
+    ) -> BridgedSpaceManager {
+        BridgedSpaceManager(
+            transfer: transfer, switcher: switcher ?? SwitchSpy(transfer: transfer), scheduler: scheduler.schedule,
+            frontWindowProvider: focusedWindow ?? { window },
+            windowSnapshotProvider: snapshot ?? { _ in
+                SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame, level: 0, isOnScreen: true)
+            },
+            accessibilityAuthorized: { true }, screenProvider: { _ in NSScreen.screens.first },
+            displayIdentifierAtPoint: { _ in "secondary" },
+            raiseWindow: raise ?? { _, activate in transfer.events.append(activate ? "raise" : "order") },
+            windowIsFrontmost: frontmost, followMovedWindowProvider: follow,
+            coordinator: coordinator, physicalInputMonitor: input
+        )
+    }
+
+    func testUserFocusChangeCancelsDestinationRestoration() {
+        let transfer = TransferSpy()
+        let window = TestWindow()
+        let other = TestWindow()
+        other.testWindowID = 202
+        var focused: AccessibilityElement? = window
+        let scheduler = MoveScheduler()
+        let input = InputMonitorSpy()
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  input: input, focusedWindow: { focused })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        scheduler.runNext()
+        focused = other
+        input.trigger()
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace", "move:101:10"])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testAutomaticDestinationFocusDoesNotSuppressTheMovedWindowRaise() {
+        let transfer = TransferSpy()
+        let window = TestWindow()
+        let other = TestWindow()
+        other.testWindowID = 202
+        var focused: AccessibilityElement? = other
+        let scheduler = MoveScheduler()
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  focusedWindow: { focused }, raise: { element, activate in
+            XCTAssertTrue(activate)
+            XCTAssertEqual(element.windowId, 101)
+            transfer.events.append("raise")
+            focused = window
+        })
+
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace, windowElement: window)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        XCTAssertEqual(transfer.events.last, "raise")
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(focused?.windowId, 101)
+        XCTAssertEqual(transfer.events.filter { $0 == "raise" }.count, 1)
+    }
+
+    func testLateDestinationOrderingChangeRestartsConfirmationAndRetriesTheRaise() {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        var frontmost = false
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  raise: { _, _ in raises += 1; frontmost = true },
+                                  frontmost: { _, _ in frontmost })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        scheduler.runNext()
+        scheduler.runNext()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+
+        frontmost = false
+        scheduler.runNext()
+        XCTAssertEqual(raises, 2)
+        for _ in 0..<2 { scheduler.runNext() }
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        scheduler.runNext()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testVisibilityLagAfterSpaceArrivalIsRetriedInsteadOfSkippingTheRaise() {
+        let transfer = TransferSpy()
+        let window = TestWindow()
+        let scheduler = MoveScheduler()
+        var visible = true
+        var raises = 0
+        var frontmost = false
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  snapshot: { _ in
+            SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame, level: 0, isOnScreen: visible)
+        }, raise: { _, _ in raises += 1; frontmost = true }, frontmost: { _, _ in frontmost })
+
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        visible = false
+        scheduler.runNext()
+        XCTAssertEqual(raises, 0)
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        visible = true
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(raises, 1)
+    }
+
+    func testPhysicalInputCancelsOrderRetriesAfterTheFirstRaise() {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let input = InputMonitorSpy()
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  input: input, raise: { _, _ in raises += 1 }, frontmost: { _, _ in false })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        input.trigger()
+        scheduler.runNext()
+        XCTAssertEqual(raises, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertNil(input.handler)
+    }
+
+    func testOrderRetryStopsWhenTheWindowOrDisplayLeavesTheDestination() {
+        for windowLeaves in [true, false] {
+            let transfer = TransferSpy()
+            let scheduler = MoveScheduler()
+            var raises = 0
+            let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                      raise: { _, _ in raises += 1 }, frontmost: { _, _ in false })
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+            transfer.memberships = [10]
+            transfer.displayedSpace = 10
+            scheduler.runNext()
+            if windowLeaves { transfer.memberships = [57] } else { transfer.displayedSpace = 57 }
+            scheduler.runNext()
+            XCTAssertEqual(raises, 1)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+        }
+    }
+
+    func testChangedWindowIdentityIsNeverRaisedOnTheDestination() {
+        let transfer = TransferSpy()
+        let window = TestWindow()
+        let scheduler = MoveScheduler()
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  raise: { _, _ in raises += 1 })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        window.testWindowID = 202
+        scheduler.runNext()
+        XCTAssertEqual(raises, 0)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testOldOrderCallbackCannotRaiseDuringANewerMove() throws {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  raise: { _, _ in raises += 1 })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        let oldCallback = try XCTUnwrap(scheduler.actions.first)
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        transfer.memberships = [57]
+        transfer.displayedSpace = 57
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        oldCallback()
+        XCTAssertEqual(raises, 1)
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(raises, 2)
+    }
+
+    func testMissionControlCancelsAWindowOrderRetry() {
+        var safe = true
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { safe }, workspaceNotificationCenter: NotificationCenter())
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  coordinator: coordinator, raise: { _, _ in raises += 1 }, frontmost: { _, _ in false })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        safe = false
+        scheduler.runNext()
+        XCTAssertEqual(raises, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        safe = true
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testDeinitCancelsOrderRetriesAndReleasesTheOperation() {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let input = InputMonitorSpy()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        var raises = 0
+        var manager: BridgedSpaceManager? = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                                        coordinator: coordinator, input: input,
+                                                        raise: { _, _ in raises += 1 }, frontmost: { _, _ in false })
+        XCTAssertTrue(manager?.execute(parameters: ExecutionParameters(.nextSpace)) == true)
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        manager = nil
+        scheduler.runNext()
+        XCTAssertEqual(raises, 1)
+        XCTAssertNil(input.handler)
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testUnconfirmedOrderHasABoundedRetryAndReleasesTheOperation() {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  coordinator: coordinator, raise: { _, _ in raises += 1 }, frontmost: { _, _ in nil })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        transfer.displayedSpace = 10
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(raises, 21)
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testBackgroundArrivalIsOrderedWithoutActivatingOrFollowingIt() {
+        let transfer = TransferSpy()
+        let window = TestWindow()
+        let scheduler = MoveScheduler()
+        var visible = true
+        var frontmost = false
+        var raises = 0
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  focusedWindow: { nil }, snapshot: { _ in
+            SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame, level: 0, isOnScreen: visible)
+        }, raise: { _, activate in
+            XCTAssertFalse(activate)
+            raises += 1
+            frontmost = true
+        }, frontmost: { _, _ in frontmost }, follow: { false })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace, windowElement: window)))
+        visible = false
+        transfer.memberships = [10]
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(raises, 1)
+        XCTAssertEqual(transfer.displayedSpace, 57)
+        XCTAssertEqual(transfer.events, ["move:101:10"])
+    }
+
+    func testPhysicalInputPreventsDeferredTransferOrRaisingTheMovedWindow() {
+        for interruptBeforeCommit in [true, false] {
+            let transfer = TransferSpy()
+            let window = TestWindow()
+            let scheduler = MoveScheduler()
+            let input = InputMonitorSpy()
+            let switcher = SwitchSpy(transfer: transfer)
+            switcher.defersCommit = true
+            let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                      switcher: switcher, input: input)
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+            if !interruptBeforeCommit { switcher.commit() }
+            input.trigger()
+            switcher.commit()
+            switcher.finish()
+            transfer.memberships = [10]
+            transfer.displayedSpace = 10
+            scheduler.runNext()
+            XCTAssertFalse(transfer.events.contains("raise"))
+            XCTAssertEqual(transfer.events.contains("move:101:10"), !interruptBeforeCommit)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+            XCTAssertNil(input.handler)
+        }
+    }
+
+    func testQueuedInputFromAnOlderMoveDoesNotCancelANewMove() throws {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let input = InputMonitorSpy()
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler, input: input)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        let staleInput = try XCTUnwrap(input.handler)
+        transfer.memberships = [10]
+        scheduler.runNext()
+        transfer.displayedSpace = 10
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+
+        transfer.memberships = [57]
+        transfer.displayedSpace = 57
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        staleInput()
+        transfer.memberships = [10]
+        scheduler.runNext()
+        transfer.displayedSpace = 10
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.events.filter { $0 == "raise" }.count, 2)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testMoveDoesNotStartInMissionControlOrDuringAnotherSpaceOperation() throws {
+        for missionControl in [true, false] {
+            let coordinator = SpaceOperationCoordinator(environmentIsSafe: { !missionControl }, workspaceNotificationCenter: NotificationCenter())
+            let operation = missionControl ? nil : try XCTUnwrap(coordinator.begin())
+            let transfer = TransferSpy()
+            let scheduler = MoveScheduler()
+            let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler, coordinator: coordinator)
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+            XCTAssertTrue(transfer.events.isEmpty)
+            XCTAssertTrue(scheduler.actions.isEmpty)
+            withExtendedLifetime(operation) {}
+        }
+    }
+
+    func testMissionControlOpeningBeforeCommitPreventsTheWindowTransfer() {
+        var safe = true
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { safe }, workspaceNotificationCenter: NotificationCenter())
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let switcher = SwitchSpy(transfer: transfer)
+        switcher.defersCommit = true
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  switcher: switcher, coordinator: coordinator)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        safe = false
+        switcher.commit()
+        switcher.finish()
+        scheduler.runNext()
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace"])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        safe = true
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testRaiseWaitsUntilTheFollowGestureFinishes() throws {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let switcher = SwitchSpy(transfer: transfer)
+        switcher.isSpaceActionInProgress = true
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  switcher: switcher, coordinator: coordinator)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        transfer.memberships = [10]
+        scheduler.runNext()
+        let operation = try XCTUnwrap(switcher.receivedOperation)
+        XCTAssertTrue(coordinator.begin(continuing: operation) === operation)
+        transfer.displayedSpace = 10
+        scheduler.runNext()
+        XCTAssertFalse(transfer.events.contains("raise"))
+        switcher.isSpaceActionInProgress = false
+        scheduler.runNext()
+        XCTAssertEqual(transfer.events.last, "raise")
+    }
+
+    func testChangedWindowVisibilityOrLevelPreventsRaising() {
+        for hidden in [true, false] {
+            let transfer = TransferSpy()
+            let scheduler = MoveScheduler()
+            let window = TestWindow()
+            var moving = false
+            let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler, snapshot: { _ in
+                SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame,
+                                    level: moving && !hidden ? 3 : 0, isOnScreen: !moving || !hidden)
+            })
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+            moving = true
+            transfer.memberships = [10]
+            scheduler.runNext()
+            transfer.displayedSpace = 10
+            scheduler.runNext()
+            XCTAssertFalse(transfer.events.contains("raise"))
         }
     }
 
@@ -931,7 +1531,9 @@ class BridgedSpaceManagerTests: XCTestCase {
                 SpaceWindowSnapshot(windowId: 101, pid: 42,
                                     frame: window.frame, level: 0, isOnScreen: true)
             },
-            accessibilityAuthorized: { true }
+            accessibilityAuthorized: { true },
+            coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+            physicalInputMonitor: InputMonitorSpy()
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.prevSpace)))
@@ -940,7 +1542,7 @@ class BridgedSpaceManagerTests: XCTestCase {
         XCTAssertTrue(scheduled.isEmpty)
     }
 
-    func testMoveIsVerifiedBeforeSwitchingDisplayedSpace() {
+    func testFollowSwitchStartsWithoutWaitingForMoveConfirmation() {
         let transfer = TransferSpy()
         let window = TestWindow()
         let screen = NSScreen.screens.first
@@ -957,23 +1559,72 @@ class BridgedSpaceManagerTests: XCTestCase {
             accessibilityAuthorized: { true },
             screenProvider: { _ in screen },
             displayIdentifierAtPoint: { _ in "secondary" },
-            raiseWindow: { _ in transfer.events.append("raise") },
-            followMovedWindowProvider: { true }
+            raiseWindow: { _, activate in transfer.events.append(activate ? "raise" : "order") }, windowIsFrontmost: { _, _ in true },
+            followMovedWindowProvider: { true },
+            coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+            physicalInputMonitor: InputMonitorSpy()
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
-        XCTAssertEqual(transfer.events, ["move:101:10"])
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace", "move:101:10"])
         XCTAssertEqual(scheduled.count, 1)
 
         transfer.memberships = [10]
         scheduled.removeFirst()()
-        XCTAssertEqual(transfer.events, ["move:101:10", "switch:switchNextSpace"])
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace", "move:101:10"])
         XCTAssertEqual(scheduled.count, 1)
 
         transfer.displayedSpace = 10
         scheduled.removeFirst()()
-        XCTAssertEqual(transfer.events, ["move:101:10", "switch:switchNextSpace", "raise"])
+        for _ in 0..<3 { scheduled.removeFirst()() }
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace", "move:101:10", "raise"])
         XCTAssertTrue(scheduled.isEmpty)
+    }
+
+    func testRejectedFollowSwitchLeavesWindowOnItsOriginalSpace() {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let switcher = SwitchSpy(transfer: transfer)
+        switcher.acceptsSwitch = false
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  switcher: switcher, coordinator: coordinator)
+
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertTrue(transfer.events.isEmpty)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertTrue(scheduler.actions.isEmpty)
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testCancelledFollowSwitchDoesNotSubmitALateWindowTransfer() {
+        let transfer = TransferSpy()
+        let scheduler = MoveScheduler()
+        let switcher = SwitchSpy(transfer: transfer)
+        switcher.defersCommit = true
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler, switcher: switcher)
+
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace"])
+        switcher.finish()
+        scheduler.runNext()
+        switcher.commit()
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace"])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testFailedTransferDoesNotRaiseTheWindowOrHoldTheOperation() {
+        let transfer = TransferSpy()
+        transfer.moveResult = false
+        let scheduler = MoveScheduler()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler, coordinator: coordinator)
+
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertEqual(transfer.events, ["switch:switchNextSpace", "move:101:10"])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertTrue(scheduler.actions.isEmpty)
+        XCTAssertNotNil(coordinator.begin())
     }
 
     func testMoveWithoutFollowingLeavesDisplayedSpaceAlone() {
@@ -994,8 +1645,10 @@ class BridgedSpaceManagerTests: XCTestCase {
             accessibilityAuthorized: { true },
             screenProvider: { _ in screen },
             displayIdentifierAtPoint: { _ in "secondary" },
-            raiseWindow: { _ in transfer.events.append("raise") },
-            followMovedWindowProvider: { followMovedWindow }
+            raiseWindow: { _, activate in transfer.events.append(activate ? "raise" : "order") }, windowIsFrontmost: { _, _ in true },
+            followMovedWindowProvider: { followMovedWindow },
+            coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+            physicalInputMonitor: InputMonitorSpy()
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
@@ -1006,7 +1659,8 @@ class BridgedSpaceManagerTests: XCTestCase {
         followMovedWindow = true
         transfer.memberships = [10]
         scheduled.removeFirst()()
-        XCTAssertEqual(transfer.events, ["move:101:10"])
+        for _ in 0..<3 { scheduled.removeFirst()() }
+        XCTAssertEqual(transfer.events, ["move:101:10", "order"])
         XCTAssertEqual(transfer.displayedSpace, 57)
         XCTAssertTrue(scheduled.isEmpty)
     }
@@ -1026,12 +1680,45 @@ class BridgedSpaceManagerTests: XCTestCase {
             },
             accessibilityAuthorized: { true },
             screenProvider: { _ in screen },
-            displayIdentifierAtPoint: { _ in "main" }
+            displayIdentifierAtPoint: { _ in "main" },
+            coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+            physicalInputMonitor: InputMonitorSpy()
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
         XCTAssertTrue(transfer.events.isEmpty)
         XCTAssertTrue(scheduled.isEmpty)
+    }
+}
+
+class SpaceWindowOrderTests: XCTestCase {
+    private func info(_ id: CGWindowID, level: CGWindowLevel = 0, alpha: CGFloat = 1) -> WindowInfo {
+        WindowInfo(id: id, level: level, frame: CGRect(x: 100, y: 100, width: 400, height: 300),
+                   pid: 42, processName: "TestApp", alpha: alpha)
+    }
+
+    func testDestinationOrderIgnoresFloatingWindowsAndOtherSpacesOrDisplays() {
+        let windows = [info(1, level: 27), info(2), info(3, alpha: 0), info(101), info(4)]
+        XCTAssertEqual(SpaceWindowOrder.isFrontmost(windowID: 101, in: windows,
+                                                   onDestination: { $0 == 101 || $0 == 4 }), true)
+        XCTAssertEqual(SpaceWindowOrder.isFrontmost(windowID: 4, in: windows,
+                                                   onDestination: { $0 == 101 || $0 == 4 }), false)
+    }
+
+    func testMissingWindowOrUnreadableDestinationCannotConfirmOrder() {
+        XCTAssertNil(SpaceWindowOrder.isFrontmost(windowID: 101, in: [info(2)], onDestination: { _ in true }))
+        XCTAssertNil(SpaceWindowOrder.isFrontmost(windowID: 101, in: [info(2), info(101)],
+                                                  onDestination: { $0 == 101 ? true : nil }))
+    }
+
+    func testWindowDescriptionsCannotReorderOrOmitTheDestinationStack() {
+        let descriptions = [info(101), info(2)]
+        XCTAssertEqual(SpaceWindowOrder.isFrontmost(windowID: 101, orderedIDs: [2, 101],
+                                                   descriptions: descriptions, onDestination: { _ in true }), false)
+        XCTAssertEqual(SpaceWindowOrder.isFrontmost(windowID: 101, orderedIDs: [101, 2],
+                                                   descriptions: descriptions, onDestination: { _ in true }), true)
+        XCTAssertNil(SpaceWindowOrder.isFrontmost(windowID: 101, orderedIDs: [3, 101, 2],
+                                                 descriptions: descriptions, onDestination: { _ in true }))
     }
 }
 
@@ -1452,9 +2139,12 @@ class SpaceSwitcherTests: XCTestCase {
         var phaseDelay: TimeInterval = 0.01
         var prepareResult = true
         var failedPhase: SpaceGesturePhase?
+        var currentSpaceID: UInt64 = 57
+        var changesSpace = true
         private(set) var directions = [SpaceDirection]()
         private(set) var phases = [SpaceGesturePhase]()
         private(set) var discardCount = 0
+        var onPost: ((SpaceGesturePhase) -> Void)?
 
         func prepare(direction: SpaceDirection) -> Bool {
             directions.append(direction)
@@ -1463,6 +2153,8 @@ class SpaceSwitcherTests: XCTestCase {
 
         func post(_ phase: SpaceGesturePhase) -> Bool {
             phases.append(phase)
+            onPost?(phase)
+            if phase == .ended, phase != failedPhase, changesSpace { currentSpaceID += 1 }
             return phase != failedPhase
         }
 
@@ -1489,11 +2181,259 @@ class SpaceSwitcherTests: XCTestCase {
         }
     }
 
+    private final class InputMonitorSpy: SpacePhysicalInputMonitoring {
+        var handler: (() -> Void)?
+        func start(_ handler: @escaping () -> Void) { self.handler = handler }
+        func stop() { handler = nil }
+        func trigger() { handler?() }
+    }
+
+    private func makeSwitcher(poster: PosterSpy, scheduler: SchedulerSpy,
+                              coordinator: SpaceOperationCoordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                              currentSpace: ((NSScreen?) -> UInt64?)? = nil,
+                              mousePressed: @escaping () -> Bool = { false },
+                              input: InputMonitorSpy = InputMonitorSpy()) -> SpaceSwitcher {
+        SpaceSwitcher(eventPoster: poster, scheduler: scheduler.schedule, neighborAvailable: { _, _ in true },
+                      coordinator: coordinator, currentSpaceProvider: currentSpace ?? { _ in poster.currentSpaceID },
+                      leftMouseButtonPressed: mousePressed, physicalInputMonitor: input)
+    }
+
+    func testFollowedTransferRunsImmediatelyBeforeTheCommittingGesturePhase() {
+        for phaseDelay in [0.0, 0.01] {
+            let poster = PosterSpy()
+            poster.phaseDelay = phaseDelay
+            let scheduler = SchedulerSpy()
+            let switcher = makeSwitcher(poster: poster, scheduler: scheduler)
+            var events = [String]()
+            poster.onPost = { events.append("phase:\($0)") }
+            XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace), continuing: nil,
+                                           beforeSwitch: { events.append("transfer") }))
+            if phaseDelay > 0 {
+                XCTAssertEqual(events, ["phase:began"])
+                scheduler.runNext()
+                XCTAssertEqual(events, ["phase:began", "phase:changed"])
+                scheduler.runNext()
+            }
+            XCTAssertEqual(events, ["phase:began", "phase:changed", "transfer", "phase:ended"])
+            scheduler.runNext()
+            XCTAssertFalse(switcher.isSpaceActionInProgress)
+            XCTAssertEqual(events.filter { $0 == "transfer" }.count, 1)
+        }
+    }
+
+    func testInterruptingTheFollowGestureNeverRunsItsPendingTransfer() {
+        for interruptAfterChanged in [false, true] {
+            let poster = PosterSpy()
+            let scheduler = SchedulerSpy()
+            let input = InputMonitorSpy()
+            let switcher = makeSwitcher(poster: poster, scheduler: scheduler, input: input)
+            var transfers = 0
+            XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace), continuing: nil,
+                                           beforeSwitch: { transfers += 1 }))
+            if interruptAfterChanged { scheduler.runNext() }
+            input.trigger()
+            scheduler.runNext()
+            XCTAssertEqual(transfers, 0)
+            XCTAssertFalse(switcher.isSpaceActionInProgress)
+            XCTAssertEqual(poster.phases.last, .ended)
+        }
+    }
+
+    func testFailedGesturePreparationDoesNotRetainThePendingTransfer() {
+        let poster = PosterSpy()
+        poster.prepareResult = false
+        let scheduler = SchedulerSpy()
+        let switcher = makeSwitcher(poster: poster, scheduler: scheduler)
+        var transfers = 0
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace), continuing: nil,
+                                       beforeSwitch: { transfers += 1 }))
+        poster.prepareResult = true
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
+        for _ in 0..<3 { scheduler.runNext() }
+        XCTAssertEqual(transfers, 0)
+    }
+
+    func testSeparateSwitchersCannotInterleaveTheirGestures() {
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let firstPoster = PosterSpy()
+        let secondPoster = PosterSpy()
+        let scheduler = SchedulerSpy()
+        let first = makeSwitcher(poster: firstPoster, scheduler: scheduler, coordinator: coordinator)
+        let second = makeSwitcher(poster: secondPoster, scheduler: scheduler, coordinator: coordinator)
+        XCTAssertTrue(first.execute(parameters: ExecutionParameters(.switchNextSpace)))
+        XCTAssertTrue(second.execute(parameters: ExecutionParameters(.switchPrevSpace)))
+        XCTAssertTrue(secondPoster.phases.isEmpty)
+        scheduler.runNext()
+        scheduler.runNext()
+        scheduler.runNext()
+        XCTAssertTrue(second.execute(parameters: ExecutionParameters(.switchPrevSpace)))
+        XCTAssertEqual(secondPoster.phases, [.began])
+    }
+
+    func testMoveAndItsFollowGestureExcludeDirectSwitchesUntilBothFinish() throws {
+        final class Window: AccessibilityElement {
+            override var windowId: CGWindowID? { 101 }
+            override var frame: CGRect { CGRect(x: 100, y: 100, width: 500, height: 300) }
+            override var isSheet: Bool? { false }
+            override var isModal: Bool? { false }
+            override var isMinimized: Bool? { false }
+            override var isFullScreen: Bool? { false }
+            init() { super.init(AXUIElementCreateSystemWide()) }
+        }
+        final class Transfer: WindowSpaceTransferring {
+            var isAvailable = true
+            var memberships: [UInt64]? = [57]
+            let current: () -> UInt64
+            init(current: @escaping () -> UInt64) { self.current = current }
+            func spaces(for windowID: CGWindowID) -> [UInt64]? { memberships }
+            func adjacentSpace(for windowID: CGWindowID, direction: SpaceDirection) -> AdjacentManagedSpace? {
+                AdjacentManagedSpace(sourceID: 57, destinationID: 58, displayIdentifier: "display")
+            }
+            func currentSpace(for displayIdentifier: String) -> UInt64? { current() }
+            func move(windowID: CGWindowID, to spaceID: UInt64) -> Bool { memberships = [spaceID]; return true }
+        }
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let poster = PosterSpy()
+        let directPoster = PosterSpy()
+        let scheduler = SchedulerSpy()
+        let follow = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator)
+        let direct = makeSwitcher(poster: directPoster, scheduler: scheduler, coordinator: coordinator)
+        let window = Window()
+        let cursor = try XCTUnwrap(CGEvent(source: nil)).location
+        let screen = try XCTUnwrap(NSScreen.screens.first { $0.frame.screenFlipped.contains(cursor) })
+        let transfer = Transfer(current: { poster.currentSpaceID })
+        var raises = 0
+        let move = BridgedSpaceManager(
+            transfer: transfer, switcher: follow, scheduler: scheduler.schedule,
+            frontWindowProvider: { window },
+            windowSnapshotProvider: { _ in SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame, level: 0, isOnScreen: true) },
+            accessibilityAuthorized: { true }, screenProvider: { _ in screen },
+            displayIdentifierAtPoint: { _ in "display" }, raiseWindow: { _, _ in raises += 1 }, windowIsFrontmost: { _, _ in true },
+            followMovedWindowProvider: { true }, coordinator: coordinator, physicalInputMonitor: InputMonitorSpy()
+        )
+        XCTAssertTrue(move.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertEqual(poster.phases, [.began])
+        XCTAssertTrue(direct.execute(parameters: ExecutionParameters(.switchPrevSpace)))
+        XCTAssertTrue(directPoster.phases.isEmpty)
+        for _ in 0..<8 {
+            if !follow.isSpaceActionInProgress { break }
+            scheduler.runNext()
+        }
+        XCTAssertFalse(follow.isSpaceActionInProgress)
+        XCTAssertTrue(move.isSpaceActionInProgress)
+        XCTAssertTrue(direct.execute(parameters: ExecutionParameters(.switchPrevSpace)))
+        XCTAssertTrue(directPoster.phases.isEmpty)
+        scheduler.runNext()
+        for _ in 0..<3 { scheduler.runNext() }
+        XCTAssertEqual(raises, 1)
+        XCTAssertFalse(move.isSpaceActionInProgress)
+        XCTAssertTrue(direct.execute(parameters: ExecutionParameters(.switchPrevSpace)))
+        XCTAssertEqual(directPoster.phases, [.began])
+    }
+
+    func testPhysicalInputEndsTheGestureAndReleasesTheOperation() {
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let poster = PosterSpy()
+        let scheduler = SchedulerSpy()
+        let input = InputMonitorSpy()
+        let switcher = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator, input: input)
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
+        input.trigger()
+        XCTAssertEqual(poster.phases, [.began, .ended])
+        XCTAssertFalse(switcher.isSpaceActionInProgress)
+        XCTAssertNil(input.handler)
+        XCTAssertNotNil(coordinator.begin())
+        scheduler.runNext()
+        XCTAssertEqual(poster.phases, [.began, .ended])
+    }
+
+    func testOperationRemainsHeldUntilTheDisplayedSpaceChanges() {
+        let poster = PosterSpy()
+        poster.changesSpace = false
+        let scheduler = SchedulerSpy()
+        let switcher = makeSwitcher(poster: poster, scheduler: scheduler)
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
+        scheduler.runNext()
+        scheduler.runNext()
+        scheduler.runNext()
+        XCTAssertTrue(switcher.isSpaceActionInProgress)
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchPrevSpace)))
+        XCTAssertEqual(poster.directions, [.next])
+        poster.currentSpaceID += 1
+        scheduler.runNext()
+        XCTAssertFalse(switcher.isSpaceActionInProgress)
+    }
+
+    func testSpaceConfirmationTimeoutReleasesOperation() {
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let poster = PosterSpy()
+        poster.changesSpace = false
+        let scheduler = SchedulerSpy()
+        let switcher = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator)
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
+        for _ in 0..<33 { scheduler.runNext() }
+        XCTAssertFalse(switcher.isSpaceActionInProgress)
+        XCTAssertNotNil(coordinator.begin())
+        XCTAssertEqual(poster.phases, [.began, .changed, .ended])
+    }
+
+    func testMissionControlInterruptsAndEndsAPacedGesture() {
+        var safe = true
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { safe }, workspaceNotificationCenter: NotificationCenter())
+        let poster = PosterSpy()
+        let scheduler = SchedulerSpy()
+        let switcher = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator)
+        XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
+        safe = false
+        scheduler.runNext()
+        XCTAssertEqual(poster.phases, [.began, .ended])
+        XCTAssertFalse(switcher.isSpaceActionInProgress)
+        safe = true
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testFailedPhaseAndDeinitCloseBegunGestures() {
+        for deinitializing in [true, false] {
+            let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+            let poster = PosterSpy()
+            let scheduler = SchedulerSpy()
+            var switcher: SpaceSwitcher? = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator)
+            XCTAssertTrue(switcher!.execute(parameters: ExecutionParameters(.switchNextSpace)))
+            if deinitializing {
+                switcher = nil
+                XCTAssertEqual(poster.phases, [.began, .ended])
+            } else {
+                poster.failedPhase = .changed
+                scheduler.runNext()
+                XCTAssertEqual(poster.phases, [.began, .changed, .ended])
+            }
+            XCTAssertNotNil(coordinator.begin())
+            XCTAssertEqual(poster.discardCount, 1)
+        }
+    }
+
+    func testPreflightFailuresAndMissionControlNeverPostAGesture() {
+        for failure in 0..<4 {
+            let coordinator = SpaceOperationCoordinator(environmentIsSafe: { failure != 0 }, workspaceNotificationCenter: NotificationCenter())
+            let poster = PosterSpy()
+            poster.prepareResult = failure != 1
+            let scheduler = SchedulerSpy()
+            let switcher = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator,
+                                         currentSpace: { _ in failure == 2 ? nil : 57 },
+                                         mousePressed: { failure == 3 })
+            XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
+            XCTAssertTrue(poster.phases.isEmpty)
+            if failure != 0 { XCTAssertNotNil(coordinator.begin()) }
+        }
+    }
+
     func testPostsTinycastPhasesAndDropsOverlappingSwitch() {
         let poster = PosterSpy()
         let scheduler = SchedulerSpy()
         let switcher = SpaceSwitcher(eventPoster: poster, scheduler: scheduler.schedule,
-                                    neighborAvailable: { _, _ in true })
+                                    neighborAvailable: { _, _ in true },
+                                    coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                                    currentSpaceProvider: { _ in poster.currentSpaceID }, leftMouseButtonPressed: { false }, physicalInputMonitor: InputMonitorSpy())
 
         XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
         XCTAssertEqual(poster.directions, [.next])
@@ -1516,7 +2456,9 @@ class SpaceSwitcherTests: XCTestCase {
         let poster = PosterSpy()
         let scheduler = SchedulerSpy()
         let switcher = SpaceSwitcher(eventPoster: poster, scheduler: scheduler.schedule,
-                                    neighborAvailable: { _, _ in true })
+                                    neighborAvailable: { _, _ in true },
+                                    coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                                    currentSpaceProvider: { _ in poster.currentSpaceID }, leftMouseButtonPressed: { false }, physicalInputMonitor: InputMonitorSpy())
 
         XCTAssertFalse(switcher.execute(parameters: ExecutionParameters(.nextSpace)))
         poster.accessibilityAuthorized = false
@@ -1532,7 +2474,9 @@ class SpaceSwitcherTests: XCTestCase {
             let switcher = SpaceSwitcher(
                 eventPoster: poster,
                 scheduler: scheduler.schedule,
-                neighborAvailable: { _, _ in hasNeighbor }
+                neighborAvailable: { _, _ in hasNeighbor },
+                coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                currentSpaceProvider: { _ in poster.currentSpaceID }, leftMouseButtonPressed: { false }, physicalInputMonitor: InputMonitorSpy()
             )
 
             XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchPrevSpace)))
