@@ -27873,6 +27873,33 @@
         }
       }
     },
+    "Switch to Desktop 1" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 2" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 3" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 4" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 5" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 6" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 7" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 8" : {
+      "extractionState" : "manual"
+    },
+    "Switch to Desktop 9" : {
+      "extractionState" : "manual"
+    },
     "Switch to Next Space" : {
 
     },

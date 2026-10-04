@@ -216,6 +216,7 @@
 		F2A0CE000000000000000008 /* SpaceSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000007 /* SpaceSwitcher.swift */; };
 		F2A0CE00000000000000000A /* BridgedSpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE000000000000000009 /* BridgedSpaceManager.swift */; };
 		F2A0CE00000000000000000C /* SpaceOperationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE00000000000000000B /* SpaceOperationCoordinator.swift */; };
+		F2A0CE00000000000000000E /* NumberedSpaceSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0CE00000000000000000D /* NumberedSpaceSwitcher.swift */; };
 		F4EED30B47FB6C55EA937254 /* TopRightTwelfthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8357E928530D10A806F3CD /* TopRightTwelfthCalculation.swift */; };
 		F51A7467767F8EAF97321A00 /* TopRightSixteenthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD222258713B13274FB651B0 /* TopRightSixteenthCalculation.swift */; };
 		F7B6C43BB57F8064F49DDBB6 /* BottomLeftSixteenthCalculation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEE147786B2CD7350FAFB700 /* BottomLeftSixteenthCalculation.swift */; };
@@ -461,6 +462,7 @@
 		F2A0CE000000000000000007 /* SpaceSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSwitcher.swift; sourceTree = "<group>"; };
 		F2A0CE000000000000000009 /* BridgedSpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgedSpaceManager.swift; sourceTree = "<group>"; };
 		F2A0CE00000000000000000B /* SpaceOperationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceOperationCoordinator.swift; sourceTree = "<group>"; };
+		F2A0CE00000000000000000D /* NumberedSpaceSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumberedSpaceSwitcher.swift; sourceTree = "<group>"; };
 		F3592F8E85CE82B8FA662A31 /* TwelfthsRepeated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwelfthsRepeated.swift; sourceTree = "<group>"; };
 		FA34D0FE2F7E896E00EEBEF1 /* SpecificDisplayCalculation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecificDisplayCalculation.swift; sourceTree = "<group>"; };
 		FD222258713B13274FB651B0 /* TopRightSixteenthCalculation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopRightSixteenthCalculation.swift; sourceTree = "<group>"; };
@@ -737,6 +739,7 @@
 				F2A0CE000000000000000007 /* SpaceSwitcher.swift */,
 				F2A0CE000000000000000009 /* BridgedSpaceManager.swift */,
 				F2A0CE00000000000000000B /* SpaceOperationCoordinator.swift */,
+				F2A0CE00000000000000000D /* NumberedSpaceSwitcher.swift */,
 				9824703C22B13C7E0037B409 /* AccessibilityElement.swift */,
 				9824703E22B13FBC0037B409 /* ScreenDetection.swift */,
 				98C275662322E2DA009B9292 /* WindowHistory.swift */,
@@ -1145,6 +1148,7 @@
 				F2A0CE000000000000000008 /* SpaceSwitcher.swift in Sources */,
 				F2A0CE00000000000000000A /* BridgedSpaceManager.swift in Sources */,
 				F2A0CE00000000000000000C /* SpaceOperationCoordinator.swift in Sources */,
+				F2A0CE00000000000000000E /* NumberedSpaceSwitcher.swift in Sources */,
 				98D16A492592B460005228CB /* NotificationExtension.swift in Sources */,
 				AA0AC000291C1B5E00D125D2 /* CGExtension.swift in Sources */,
 				BB0B80492EFB0AF900A9B165 /* TopVerticalTwoThirdsCalculation.swift in Sources */,

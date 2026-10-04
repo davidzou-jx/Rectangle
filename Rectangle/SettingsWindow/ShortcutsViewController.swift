@@ -303,7 +303,8 @@ class ShortcutsViewController: NSViewController {
             ShortcutCategory(actions: [.maximize, .almostMaximize, .maximizeHeight, .larger, .smaller, .center, .restore]),
             ShortcutCategory(actions: [.nextDisplay, .previousDisplay, .focusNextDisplay]),
             ShortcutCategory(actions: [.nextSpace, .prevSpace]),
-            ShortcutCategory(actions: [.switchNextSpace, .switchPrevSpace])
+            ShortcutCategory(actions: [.switchNextSpace, .switchPrevSpace]),
+            ShortcutCategory(actions: WindowAction.numberedSpaceSwitches)
         ]
         
         let moreCategories: [ShortcutCategory] = [

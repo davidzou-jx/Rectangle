@@ -1,0 +1,261 @@
+import Cocoa
+import Darwin
+
+struct ManagedDisplaySpaceSwitch: Equatable {
+    let sourceID: UInt64
+    let destinationID: UInt64
+    let displayIdentifier: String
+
+    var reversed: ManagedDisplaySpaceSwitch {
+        ManagedDisplaySpaceSwitch(sourceID: destinationID, destinationID: sourceID,
+                                  displayIdentifier: displayIdentifier)
+    }
+}
+
+extension ManagedSpaceTopology {
+    /// Desktop numbers span displays, but exclude native full-screen Spaces.
+    /// Resolve a fresh ID each time: Mission Control can reorder/remove desktops.
+    static func desktop(number: Int, in displays: [[String: Any]]) -> ManagedDisplaySpaceSwitch? {
+        guard number > 0 else { return nil }
+        var ordinal = 0
+        for display in displays {
+            guard let identifier = display["Display Identifier"] as? String,
+                  !identifier.isEmpty,
+                  let current = display["Current Space"] as? [String: Any],
+                  let source = (current["id64"] as? NSNumber)?.uint64Value,
+                  source != 0,
+                  let spaces = display["Spaces"] as? [[String: Any]],
+                  spaces.contains(where: { ($0["id64"] as? NSNumber)?.uint64Value == source }) else { return nil }
+            for space in spaces {
+                guard let type = (space["type"] as? NSNumber)?.intValue else { return nil }
+                if type != 0 { continue }
+                guard let destination = (space["id64"] as? NSNumber)?.uint64Value,
+                      destination != 0 else { return nil }
+                ordinal += 1
+                if ordinal == number {
+                    return ManagedDisplaySpaceSwitch(sourceID: source, destinationID: destination,
+                                                     displayIdentifier: identifier)
+                }
+            }
+        }
+        return nil
+    }
+}
+
+protocol ManagedDisplaySpaceActivating: AnyObject {
+    var isAvailable: Bool { get }
+    func desktop(number: Int) -> ManagedDisplaySpaceSwitch?
+    func currentSpace(on displayIdentifier: String) -> UInt64?
+    func destinationIsVisible(_ target: ManagedDisplaySpaceSwitch) -> Bool?
+    func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool
+}
+
+/// On macOS 27 the setter is asynchronous, despite the published header's
+/// synchronous declaration. Changing the ID alone leaves both Spaces visible:
+/// submit WillSwitch/Show/Hide/SetCurrent together, then verify asynchronously.
+final class SkyLightDisplaySpaceActivation: ManagedDisplaySpaceActivating {
+    private typealias MainConnection = @convention(c) () -> Int32
+    private typealias CopySpacesForWindows = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+    private let framework: UnsafeMutableRawPointer?
+    private let connection: Int32?
+    private let copySpacesForWindows: CopySpacesForWindows?
+    private let operationNames = [
+        "SLSBridgedWillSwitchSpacesOperation", "SLSBridgedShowSpacesOperation",
+        "SLSBridgedHideSpacesOperation", "SLSBridgedManagedDisplaySetCurrentSpaceOperation"
+    ]
+
+    init() {
+        let framework = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", RTLD_NOW)
+        self.framework = framework
+        if let framework, let main = dlsym(framework, "SLSMainConnectionID"),
+           let spaces = dlsym(framework, "SLSCopySpacesForWindows") {
+            connection = unsafeBitCast(main, to: MainConnection.self)()
+            copySpacesForWindows = unsafeBitCast(spaces, to: CopySpacesForWindows.self)
+        } else {
+            connection = nil
+            copySpacesForWindows = nil
+        }
+    }
+
+    var isAvailable: Bool {
+        guard framework != nil, connection != nil, copySpacesForWindows != nil else { return false }
+        return operationNames.allSatisfy { name in
+            guard let cls = NSClassFromString(name),
+                  hasMethod(cls, "performWithWMBridgeDelegate", encoding: "v16@0:8") else { return false }
+            if name == "SLSBridgedManagedDisplaySetCurrentSpaceOperation" {
+                return hasMethod(cls, "initWithDisplayIdentifier:spaceID:", encoding: "@32@0:8@16Q24")
+            }
+            return hasMethod(cls, "initWithSpaces:", encoding: "@24@0:8@16")
+        }
+    }
+
+    private func hasMethod(_ cls: AnyClass, _ name: String, encoding: String) -> Bool {
+        guard let method = class_getInstanceMethod(cls, NSSelectorFromString(name)),
+              let actual = method_getTypeEncoding(method) else { return false }
+        return String(cString: actual) == encoding
+    }
+
+    func desktop(number: Int) -> ManagedDisplaySpaceSwitch? {
+        guard let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces() else { return nil }
+        return ManagedSpaceTopology.desktop(number: number, in: displays)
+    }
+
+    func currentSpace(on displayIdentifier: String) -> UInt64? {
+        guard let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces() else { return nil }
+        return ManagedSpaceTopology.currentSpace(for: displayIdentifier, in: displays)
+    }
+
+    func destinationIsVisible(_ target: ManagedDisplaySpaceSwitch) -> Bool? {
+        guard currentSpace(on: target.displayIdentifier) == target.destinationID else { return false }
+        if target.sourceID == target.destinationID { return true }
+        guard let connection, let copySpacesForWindows,
+              let visible = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return nil }
+        for window in visible {
+            guard (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  let id = window[kCGWindowNumber as String] as? NSNumber else { continue }
+            let windows = [id] as NSArray
+            guard let memberships = copySpacesForWindows(connection, 7, unsafeBitCast(windows, to: CFArray.self))?
+                .takeRetainedValue() as? [NSNumber] else { return nil }
+            // Sticky windows may be visible on both Spaces. A resident source
+            // window still visible indicates the setter-only failure mode.
+            if memberships.count == 1, memberships[0].uint64Value == target.sourceID { return false }
+        }
+        return true
+    }
+
+    func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool {
+        guard isAvailable, currentSpace(on: target.displayIdentifier) == target.sourceID,
+              let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces(),
+              let display = displays.first(where: { ($0["Display Identifier"] as? String) == target.displayIdentifier }),
+              let spaces = display["Spaces"] as? [[String: Any]],
+              spaces.contains(where: { ($0["id64"] as? NSNumber)?.uint64Value == target.destinationID })
+        else { return false }
+        if target.sourceID == target.destinationID { return true }
+        // Prepare the entire batch before changing any WindowServer state.
+        var operations = [AnyObject]()
+        for name in operationNames {
+            guard let cls = NSClassFromString(name),
+                  let allocated = (cls as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue()
+            else { return false }
+            let operation: AnyObject?
+            if name == "SLSBridgedManagedDisplaySetCurrentSpaceOperation" {
+                let selector = NSSelectorFromString("initWithDisplayIdentifier:spaceID:")
+                typealias Initialize = @convention(c) (AnyObject, Selector, NSString, UInt64) -> AnyObject?
+                let initialize = unsafeBitCast(allocated.method(for: selector), to: Initialize.self)
+                operation = initialize(allocated, selector, target.displayIdentifier as NSString, target.destinationID)
+            } else {
+                let selector = NSSelectorFromString("initWithSpaces:")
+                typealias Initialize = @convention(c) (AnyObject, Selector, NSArray) -> AnyObject?
+                let initialize = unsafeBitCast(allocated.method(for: selector), to: Initialize.self)
+                let spaceID = name == "SLSBridgedHideSpacesOperation" ? target.sourceID : target.destinationID
+                operation = initialize(allocated, selector, [NSNumber(value: spaceID)] as NSArray)
+            }
+            guard let operation else { return false }
+            operations.append(operation)
+        }
+        let selector = NSSelectorFromString("performWithWMBridgeDelegate")
+        typealias Perform = @convention(c) (AnyObject, Selector) -> Void
+        for operation in operations {
+            let perform = unsafeBitCast(operation.method(for: selector), to: Perform.self)
+            perform(operation, selector)
+        }
+        return true
+    }
+}
+
+final class NumberedSpaceSwitcher: SpaceActionExecuting {
+    private let activation: ManagedDisplaySpaceActivating
+    private let coordinator: SpaceOperationCoordinator
+    private let scheduler: SpaceMoveScheduler
+    private let accessibilityAuthorized: () -> Bool
+    private let mousePressed: () -> Bool
+    private let inputMonitor: SpacePhysicalInputMonitoring
+    private var operation: SpaceOperationCoordinator.Operation?
+    private var interrupted = false
+    private var executionID: UInt64 = 0
+    var isSpaceActionInProgress: Bool { operation != nil }
+
+    init(activation: ManagedDisplaySpaceActivating = SkyLightDisplaySpaceActivation(),
+         coordinator: SpaceOperationCoordinator = .shared,
+         scheduler: @escaping SpaceMoveScheduler = { delay, action in
+             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+         },
+         accessibilityAuthorized: @escaping () -> Bool = AXIsProcessTrusted,
+         mousePressed: @escaping () -> Bool = { CGEventSource.buttonState(.combinedSessionState, button: .left) },
+         inputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor()) {
+        self.activation = activation
+        self.coordinator = coordinator
+        self.scheduler = scheduler
+        self.accessibilityAuthorized = accessibilityAuthorized
+        self.mousePressed = mousePressed
+        self.inputMonitor = inputMonitor
+    }
+
+    func execute(parameters: ExecutionParameters) -> Bool {
+        guard let number = parameters.action.desktopNumber else { return false }
+        guard !isSpaceActionInProgress, !mousePressed(), let operation = coordinator.begin() else { return true }
+        guard activation.isAvailable, accessibilityAuthorized() else {
+            NSSound.beep()
+            Logger.log("Direct desktop switching requires the bridged Space operations and Accessibility permission")
+            return true
+        }
+        guard let target = activation.desktop(number: number), target.sourceID != target.destinationID else { return true }
+        self.operation = operation
+        interrupted = false
+        executionID &+= 1
+        let id = executionID
+        inputMonitor.start { [weak self] in self?.interrupted = true }
+        guard activation.activate(target) else {
+            finish()
+            Logger.log("Unable to submit the direct desktop switch")
+            NSSound.beep()
+            return true
+        }
+        scheduler(0.05) { [weak self] in self?.confirm(target, poll: 0, stablePolls: 0, id: id) }
+        return true
+    }
+
+    private func confirm(_ target: ManagedDisplaySpaceSwitch, poll: Int, stablePolls: Int, id: UInt64,
+                         recovering: Bool = false) {
+        guard isSpaceActionInProgress, executionID == id else { return }
+        guard coordinator.canContinue else { finish(); return }
+        let current = activation.currentSpace(on: target.displayIdentifier)
+        if let current, current != target.sourceID, current != target.destinationID {
+            // Another switch owns this display now. Never switch it back.
+            finish()
+            return
+        }
+        let stable = current == target.destinationID && activation.destinationIsVisible(target) == true
+            ? stablePolls + 1 : 0
+        if stable >= 3 { finish(); return }
+        guard poll < 30 else {
+            Logger.log("Direct desktop switch did not settle on its destination")
+            if !recovering, !interrupted, current == target.destinationID {
+                // A partial Show/Hide/SetCurrent must not strand visible windows
+                // from two desktops. Restore only while our destination is current.
+                let original = target.reversed
+                if activation.activate(original) {
+                    scheduler(0.05) { [weak self] in
+                        self?.confirm(original, poll: 0, stablePolls: 0, id: id, recovering: true)
+                    }
+                    return
+                }
+            }
+            finish()
+            NSSound.beep()
+            return
+        }
+        scheduler(0.05) { [weak self] in
+            self?.confirm(target, poll: poll + 1, stablePolls: stable, id: id, recovering: recovering)
+        }
+    }
+
+    private func finish() {
+        inputMonitor.stop()
+        operation = nil
+    }
+
+    deinit { inputMonitor.stop() }
+}

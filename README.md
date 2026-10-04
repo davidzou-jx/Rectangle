@@ -59,6 +59,8 @@ The Todo window is excluded using the same rules as Rectangle's other multi-wind
 
 Assign shortcuts to **Switch to Next Space** and **Switch to Previous Space** in Preferences > Shortcuts to change the displayed Space without moving a window. These commands use Tinycast's three-phase synthetic trackpad gesture, including its macOS 27 event payload and Natural Scrolling handling, so the switch completes without the normal sliding transition. Overlapping shortcut presses are dropped while a switch is in progress. Accessibility permission is required.
 
+Assign shortcuts to **Switch to Desktop 1–9** for direct jumps without traversing intermediate Spaces. Disable the corresponding macOS shortcuts in System Settings > Keyboard > Keyboard Shortcuts > Mission Control before assigning Control-number in Rectangle. Desktop numbers follow Mission Control's normal-desktop order across displays; full-screen Spaces do not consume a number. These commands use the bridged SkyLight Show/Hide/SetCurrent operations, verify the destination, and require the corresponding runtime APIs (tested on macOS 27.0). A missing desktop does nothing. Their shortcuts are initially unassigned.
+
 At either end of a display's Space arrangement, switching farther in that direction does nothing. Space moves and switches share one operation, so overlapping commands are ignored until the move and its follow gesture have finished. Rectangle also ignores these commands while Mission Control is active or immediately after a Space change. Mouse, keyboard, or gesture input interrupts a pending synthetic switch and closes its gesture, and cancels any pending window-focus restoration.
 
 ### Move a window between Spaces

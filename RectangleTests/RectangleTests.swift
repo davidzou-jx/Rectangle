@@ -7536,7 +7536,8 @@ class ShortcutManagerSessionTests: XCTestCase {
         appDisabled: Bool = false,
         shortcuts: [WindowAction: MASShortcut]? = nil,
         spaceManager: SpaceActionExecuting = SpaceManager(),
-        spaceSwitcher: SpaceActionExecuting = SpaceSwitcher()
+        spaceSwitcher: SpaceActionExecuting = SpaceSwitcher(),
+        numberedSpaceSwitcher: SpaceActionExecuting = NumberedSpaceSwitcher()
     ) -> Harness {
         let bindingStore = BindingStoreSpy()
         let notificationCenter = NotificationCenter()
@@ -7549,6 +7550,7 @@ class ShortcutManagerSessionTests: XCTestCase {
             windowManager: WindowManager(),
             spaceManager: spaceManager,
             spaceSwitcher: spaceSwitcher,
+            numberedSpaceSwitcher: numberedSpaceSwitcher,
             bindingStore: bindingStore,
             notificationCenter: notificationCenter,
             workspaceNotificationCenter: workspaceNotificationCenter,
@@ -7629,6 +7631,20 @@ class ShortcutManagerSessionTests: XCTestCase {
 
         XCTAssertEqual(spaceManager.actions, [.switchNextSpace])
         XCTAssertEqual(spaceSwitcher.actions, [.switchNextSpace])
+    }
+
+    func testNumberedSpaceCommandRoutesWithoutObtainingOrMovingAWindow() {
+        let moves = SpaceActionSpy()
+        let gestures = SpaceActionSpy(handledActions: [.switchNextSpace, .switchPrevSpace])
+        let numbered = SpaceActionSpy(handledActions: Set(WindowAction.numberedSpaceSwitches))
+        let harness = makeHarness(shortcuts: [.switchSpaceOne: shortcut(18)], spaceManager: moves,
+                                  spaceSwitcher: gestures, numberedSpaceSwitcher: numbered)
+        harness.notificationCenter.post(name: WindowAction.switchSpaceOne.notificationName,
+                                        object: ExecutionParameters(.switchSpaceOne))
+        XCTAssertEqual(numbered.actions, [.switchSpaceOne])
+        XCTAssertTrue(moves.actions.isEmpty)
+        XCTAssertTrue(gestures.actions.isEmpty)
+        XCTAssertTrue(harness.bindingStore.boundKeys.contains(WindowAction.switchSpaceOne.name))
     }
 
     func testActiveSessionResignThenDelayedActivationRestoresBindings() {
@@ -9470,5 +9486,203 @@ private final class RepeatedMaximizeTestScreen: NSScreen {
 
     override func isEqual(_ object: Any?) -> Bool {
         (object as AnyObject?) === self
+    }
+}
+
+
+class NumberedSpaceSwitcherTests: XCTestCase {
+    private final class ActivationSpy: ManagedDisplaySpaceActivating {
+        var isAvailable = true
+        var current: UInt64 = 57
+        var visible = true
+        var submitted = true
+        var hasDesktop = true
+        var calls = [ManagedDisplaySpaceSwitch]()
+        func desktop(number: Int) -> ManagedDisplaySpaceSwitch? {
+            guard hasDesktop else { return nil }
+            return ManagedDisplaySpaceSwitch(sourceID: current, destinationID: UInt64(900 + number), displayIdentifier: "B")
+        }
+        func currentSpace(on displayIdentifier: String) -> UInt64? { current }
+        func destinationIsVisible(_ target: ManagedDisplaySpaceSwitch) -> Bool? { visible }
+        func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool {
+            calls.append(target)
+            if submitted { current = target.destinationID }
+            return submitted
+        }
+    }
+    private final class Scheduler {
+        var actions = [() -> Void]()
+        func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) { actions.append(action) }
+        func next() { if !actions.isEmpty { actions.removeFirst()() } }
+        func drain() {
+            for _ in 0..<100 {
+                if actions.isEmpty { return }
+                next()
+            }
+            XCTFail("Desktop confirmation did not finish")
+        }
+    }
+    private final class Input: SpacePhysicalInputMonitoring {
+        var handler: (() -> Void)?
+        func start(_ handler: @escaping () -> Void) { self.handler = handler }
+        func stop() { handler = nil }
+    }
+    private func coordinator(_ safe: @escaping () -> Bool = { true }) -> SpaceOperationCoordinator {
+        SpaceOperationCoordinator(environmentIsSafe: safe, workspaceNotificationCenter: NotificationCenter())
+    }
+    private func switcher(_ activation: ActivationSpy, _ scheduler: Scheduler,
+                          coordinator: SpaceOperationCoordinator? = nil, input: Input = Input(),
+                          authorized: Bool = true, mousePressed: Bool = false) -> NumberedSpaceSwitcher {
+        NumberedSpaceSwitcher(activation: activation, coordinator: coordinator ?? self.coordinator(),
+                              scheduler: scheduler.schedule, accessibilityAuthorized: { authorized },
+                              mousePressed: { mousePressed }, inputMonitor: input)
+    }
+    func testNumberedCommandsHaveDistinctStableMetadataAndNoDefaultBindings() {
+        for (index, action) in WindowAction.numberedSpaceSwitches.enumerated() {
+            XCTAssertEqual(action.rawValue, 136 + index)
+            XCTAssertEqual(action.desktopNumber, index + 1)
+            XCTAssertEqual(action.displayName, "Switch to Desktop \(index + 1)")
+            XCTAssertTrue(WindowAction.active.contains(action))
+            XCTAssertFalse(action.resizes)
+            XCTAssertFalse(action.isDragSnappable)
+            XCTAssertFalse(action.positionCycles)
+            XCTAssertEqual(action.gapsApplicable, .none)
+            XCTAssertEqual(action.classification, .display)
+            XCTAssertNil(action.spectacleDefault)
+            XCTAssertNil(action.alternateDefault)
+        }
+        XCTAssertNil(WindowAction.switchNextSpace.desktopNumber)
+        XCTAssertEqual(Set(WindowAction.numberedSpaceSwitches.map(\.name)).count, 9)
+    }
+    func testDesktopNumbersSpanDisplaysAndExcludeFullscreenSpaces() {
+        let displays: [[String: Any]] = [
+            ["Display Identifier": "A", "Current Space": ["id64": 99],
+             "Spaces": [["id64": 10, "type": 0], ["id64": 99, "type": 4], ["id64": 57, "type": 0]]],
+            ["Display Identifier": "B", "Current Space": ["id64": 901],
+             "Spaces": [["id64": 900, "type": 0], ["id64": 901, "type": 0]]]
+        ]
+        XCTAssertEqual(ManagedSpaceTopology.desktop(number: 2, in: displays),
+                       ManagedDisplaySpaceSwitch(sourceID: 99, destinationID: 57, displayIdentifier: "A"))
+        XCTAssertEqual(ManagedSpaceTopology.desktop(number: 3, in: displays),
+                       ManagedDisplaySpaceSwitch(sourceID: 901, destinationID: 900, displayIdentifier: "B"))
+        XCTAssertNil(ManagedSpaceTopology.desktop(number: 0, in: displays))
+        XCTAssertNil(ManagedSpaceTopology.desktop(number: 5, in: displays))
+    }
+    func testMalformedTopologyDoesNotRenumberRemainingDesktops() {
+        let displays: [[String: Any]] = [
+            ["Display Identifier": "A", "Current Space": ["id64": 10],
+             "Spaces": [["id64": 10, "type": 0], ["type": 0], ["id64": 57, "type": 0]]]
+        ]
+        XCTAssertNil(ManagedSpaceTopology.desktop(number: 2, in: displays))
+    }
+    func testChangingOnlySpaceIDDoesNotReleaseTheOperationLock() {
+        let activation = ActivationSpy(), scheduler = Scheduler(), coordinator = coordinator()
+        activation.visible = false
+        let manager = switcher(activation, scheduler, coordinator: coordinator)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        scheduler.next()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        XCTAssertNil(coordinator.begin())
+        activation.visible = true
+        scheduler.next()
+        scheduler.next()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        scheduler.next()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertNotNil(coordinator.begin())
+    }
+    func testOverlappingNumberedAndWindowMoveOperationsAreRejected() {
+        let activation = ActivationSpy(), scheduler = Scheduler(), coordinator = coordinator()
+        let manager = switcher(activation, scheduler, coordinator: coordinator)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceTwo)))
+        XCTAssertEqual(activation.calls.count, 1)
+        XCTAssertNil(coordinator.begin())
+        scheduler.drain()
+        XCTAssertNotNil(coordinator.begin())
+        let otherOperation = coordinator.begin()
+        XCTAssertNotNil(otherOperation)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceTwo)))
+        XCTAssertEqual(activation.calls.count, 1)
+    }
+    func testUnsupportedUntrustedDraggingAndMissionControlDoNotSubmit() {
+        for scenario in 0..<4 {
+            let activation = ActivationSpy(), scheduler = Scheduler()
+            if scenario == 0 { activation.isAvailable = false }
+            let manager = switcher(activation, scheduler, coordinator: coordinator { scenario != 3 },
+                                   authorized: scenario != 1, mousePressed: scenario == 2)
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+            XCTAssertTrue(activation.calls.isEmpty)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+        }
+    }
+    func testMissingDesktopAndAlreadyDisplayedDesktopDoNothing() {
+        let activation = ActivationSpy(), scheduler = Scheduler()
+        let manager = switcher(activation, scheduler)
+        activation.hasDesktop = false
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        activation.hasDesktop = true
+        activation.current = 901
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        XCTAssertTrue(activation.calls.isEmpty)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertFalse(manager.execute(parameters: ExecutionParameters(.leftHalf)))
+    }
+    func testFailedSubmissionReleasesOperationAndInputMonitor() {
+        let activation = ActivationSpy(), scheduler = Scheduler(), input = Input(), coordinator = coordinator()
+        activation.submitted = false
+        let manager = switcher(activation, scheduler, coordinator: coordinator, input: input)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertNil(input.handler)
+        XCTAssertNotNil(coordinator.begin())
+    }
+    func testPartialSwitchRestoresVisibilityAndKeepsLockUntilRecoverySettles() {
+        let activation = ActivationSpy(), scheduler = Scheduler(), coordinator = coordinator()
+        activation.visible = false
+        let manager = switcher(activation, scheduler, coordinator: coordinator)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        for _ in 0..<31 { scheduler.next() }
+        XCTAssertEqual(activation.calls.count, 2)
+        XCTAssertEqual(activation.calls[1], activation.calls[0].reversed)
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        XCTAssertNil(coordinator.begin())
+        activation.visible = true
+        scheduler.drain()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertNotNil(coordinator.begin())
+    }
+    func testPhysicalInputPreventsRollbackOfUsersSpaceChoice() {
+        let activation = ActivationSpy(), scheduler = Scheduler(), input = Input()
+        activation.visible = false
+        let manager = switcher(activation, scheduler, input: input)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        input.handler?()
+        scheduler.drain()
+        XCTAssertEqual(activation.calls.count, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+    func testAnExternalSpaceChangeNeverGetsReversed() {
+        let activation = ActivationSpy(), scheduler = Scheduler()
+        let manager = switcher(activation, scheduler)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        activation.current = 888
+        scheduler.drain()
+        XCTAssertEqual(activation.calls.count, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+    func testStaleCallbackCannotCompleteANewerCommand() {
+        let activation = ActivationSpy(), scheduler = Scheduler()
+        let manager = switcher(activation, scheduler)
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
+        let stale = scheduler.actions[0]
+        scheduler.drain()
+        activation.visible = false
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceTwo)))
+        stale()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        activation.visible = true
+        scheduler.drain()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
     }
 }

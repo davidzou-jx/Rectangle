@@ -169,6 +169,11 @@ final class SkyLightSpaceNeighborChecker {
         return ManagedSpaceTopology.currentSpace(for: identifier, in: displays)
     }
 
+    func managedDisplaySpaces() -> [[String: Any]]? {
+        guard let connection, let copyManagedDisplaySpaces else { return nil }
+        return copyManagedDisplaySpaces(connection)?.takeRetainedValue() as? [[String: Any]]
+    }
+
     func windows(in spaceID: UInt64) -> [CGWindowID]? {
         guard let connection, let copyWindowsWithOptionsAndTags else { return nil }
         let spaces = [NSNumber(value: spaceID)] as NSArray

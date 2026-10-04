@@ -38,6 +38,7 @@ class ShortcutManager {
     private let displayFocusManager: DisplayFocusManager
     private let spaceManager: SpaceActionExecuting
     private let spaceSwitcher: SpaceActionExecuting
+    private let numberedSpaceSwitcher: SpaceActionExecuting
     private let bindingStore: ShortcutBindingStore
     private let notificationCenter: NotificationCenter
     private let workspaceNotificationCenter: NotificationCenter
@@ -58,6 +59,7 @@ class ShortcutManager {
         screenDetection: ScreenDetection = ScreenDetection(),
         spaceManager: SpaceActionExecuting = BridgedSpaceManager(),
         spaceSwitcher: SpaceActionExecuting = SpaceSwitcher(),
+        numberedSpaceSwitcher: SpaceActionExecuting = NumberedSpaceSwitcher(),
         bindingStore: ShortcutBindingStore = MASShortcutBindingStore(),
         notificationCenter: NotificationCenter = .default,
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
@@ -80,6 +82,7 @@ class ShortcutManager {
         self.displayFocusManager = DisplayFocusManager(screenDetection: screenDetection)
         self.spaceManager = spaceManager
         self.spaceSwitcher = spaceSwitcher
+        self.numberedSpaceSwitcher = numberedSpaceSwitcher
         self.bindingStore = bindingStore
         self.notificationCenter = notificationCenter
         self.workspaceNotificationCenter = workspaceNotificationCenter
@@ -216,6 +219,10 @@ class ShortcutManager {
 
         if parameters.action == .focusNextDisplay {
             displayFocusManager.focusNextDisplay()
+            return
+        }
+
+        if numberedSpaceSwitcher.execute(parameters: parameters) {
             return
         }
 

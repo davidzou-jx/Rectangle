@@ -345,7 +345,9 @@ extension AppDelegate: NSMenuDelegate {
                     menuItem.keyEquivalentModifierMask = fullKeyEquivalent.1
                 }
             }
-            if frontmostWindow == nil && windowAction != .switchNextSpace && windowAction != .switchPrevSpace {
+            if frontmostWindow == nil
+                && windowAction.desktopNumber == nil
+                && windowAction != .switchNextSpace && windowAction != .switchPrevSpace {
                 menuItem.isEnabled = false
             }
             if windowAction == .focusNextDisplay {
