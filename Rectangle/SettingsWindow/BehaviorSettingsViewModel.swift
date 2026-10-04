@@ -68,6 +68,12 @@ final class BehaviorSettingsViewModel {
             Defaults.followMovedWindowToSpace.enabled = followMovedWindowToSpace
         }
     }
+
+    var followMovedWindowToNumberedSpace: Bool {
+        didSet {
+            Defaults.followMovedWindowToNumberedSpace.enabled = followMovedWindowToNumberedSpace
+        }
+    }
     
     var useCursorScreenDetection: Bool {
         didSet {
@@ -225,6 +231,7 @@ final class BehaviorSettingsViewModel {
         self.moveCursorAcrossDisplays = Defaults.moveCursorAcrossDisplays.userEnabled
         self.centerAcrossDisplays = Defaults.centerAcrossDisplays.userEnabled
         self.followMovedWindowToSpace = !Defaults.followMovedWindowToSpace.userDisabled
+        self.followMovedWindowToNumberedSpace = !Defaults.followMovedWindowToNumberedSpace.userDisabled
         self.useCursorScreenDetection = Defaults.useCursorScreenDetection.enabled
         
         self.doubleClickTitleBar = WindowAction(rawValue: Defaults.doubleClickTitleBar.value - 1) != nil
@@ -282,6 +289,7 @@ final class BehaviorSettingsViewModel {
         self.moveCursorAcrossDisplays = Defaults.moveCursorAcrossDisplays.userEnabled
         self.centerAcrossDisplays = Defaults.centerAcrossDisplays.userEnabled
         self.followMovedWindowToSpace = !Defaults.followMovedWindowToSpace.userDisabled
+        self.followMovedWindowToNumberedSpace = !Defaults.followMovedWindowToNumberedSpace.userDisabled
         self.useCursorScreenDetection = Defaults.useCursorScreenDetection.enabled
         
         self.doubleClickTitleBar = WindowAction(rawValue: Defaults.doubleClickTitleBar.value - 1) != nil

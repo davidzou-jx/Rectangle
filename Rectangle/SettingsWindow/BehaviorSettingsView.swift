@@ -174,7 +174,18 @@ struct BehaviorSettingsView: View {
                         Divider()
                         Toggle("Move cursor along with window across displays", isOn: $viewModel.moveCursorAcrossDisplays)
                         Toggle("Preserve maximize state when moving across displays", isOn: $viewModel.autoMaximize)
-                        Toggle("Switch to the destination Space after moving a window", isOn: $viewModel.followMovedWindowToSpace)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Toggle("Switch to the destination Space after moving a window", isOn: $viewModel.followMovedWindowToSpace)
+                            Text("Applies to Next Space and Previous Space")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Toggle("Switch to the destination desktop after a numbered window move", isOn: $viewModel.followMovedWindowToNumberedSpace)
+                            Text("Applies to Move to Desktop 1–9")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         VStack(alignment: .leading, spacing: 2) {
                             Toggle("Center windows when moving across displays", isOn: $viewModel.centerAcrossDisplays)
                             Text("When off, window-to-screen edges are preserved where applicable.")

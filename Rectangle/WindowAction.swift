@@ -151,12 +151,30 @@ enum WindowAction: Int, Codable {
          switchSpaceSix = 141,
          switchSpaceSeven = 142,
          switchSpaceEight = 143,
-         switchSpaceNine = 144
+         switchSpaceNine = 144,
+         moveSpaceOne = 145,
+         moveSpaceTwo = 146,
+         moveSpaceThree = 147,
+         moveSpaceFour = 148,
+         moveSpaceFive = 149,
+         moveSpaceSix = 150,
+         moveSpaceSeven = 151,
+         moveSpaceEight = 152,
+         moveSpaceNine = 153
 
     static let numberedSpaceSwitches: [WindowAction] = [
         .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive,
         .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine
     ]
+
+    static let numberedSpaceMoves: [WindowAction] = [
+        .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive,
+        .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine
+    ]
+
+    var moveDesktopNumber: Int? {
+        Self.numberedSpaceMoves.firstIndex(of: self).map { $0 + 1 }
+    }
 
     var desktopNumber: Int? {
         Self.numberedSpaceSwitches.firstIndex(of: self).map { $0 + 1 }
@@ -171,6 +189,7 @@ enum WindowAction: Int, Codable {
                          center, centerProminently, restore,
                          nextDisplay, previousDisplay, focusNextDisplay, nextSpace, prevSpace, switchNextSpace, switchPrevSpace,
                          switchSpaceOne, switchSpaceTwo, switchSpaceThree, switchSpaceFour, switchSpaceFive, switchSpaceSix, switchSpaceSeven, switchSpaceEight, switchSpaceNine,
+                         moveSpaceOne, moveSpaceTwo, moveSpaceThree, moveSpaceFour, moveSpaceFive, moveSpaceSix, moveSpaceSeven, moveSpaceEight, moveSpaceNine,
                          moveLeft, moveRight, moveUp, moveDown,
                          firstFourth, secondFourth, thirdFourth, lastFourth, firstThreeFourths, centerThreeFourths, lastThreeFourths,
                          topLeftSixth, topCenterSixth, topRightSixth, bottomLeftSixth, bottomCenterSixth, bottomRightSixth,
@@ -256,6 +275,15 @@ enum WindowAction: Int, Codable {
         case .switchSpaceSeven: return "switchSpaceSeven"
         case .switchSpaceEight: return "switchSpaceEight"
         case .switchSpaceNine: return "switchSpaceNine"
+        case .moveSpaceOne: return "moveSpaceOne"
+        case .moveSpaceTwo: return "moveSpaceTwo"
+        case .moveSpaceThree: return "moveSpaceThree"
+        case .moveSpaceFour: return "moveSpaceFour"
+        case .moveSpaceFive: return "moveSpaceFive"
+        case .moveSpaceSix: return "moveSpaceSix"
+        case .moveSpaceSeven: return "moveSpaceSeven"
+        case .moveSpaceEight: return "moveSpaceEight"
+        case .moveSpaceNine: return "moveSpaceNine"
         case .larger: return "larger"
         case .smaller: return "smaller"
         case .bottomHalf: return "bottomHalf"
@@ -448,6 +476,24 @@ enum WindowAction: Int, Codable {
             String(localized: "Switch to Desktop 8")
         case .switchSpaceNine:
             String(localized: "Switch to Desktop 9")
+        case .moveSpaceOne:
+            String(localized: "Move to Desktop 1")
+        case .moveSpaceTwo:
+            String(localized: "Move to Desktop 2")
+        case .moveSpaceThree:
+            String(localized: "Move to Desktop 3")
+        case .moveSpaceFour:
+            String(localized: "Move to Desktop 4")
+        case .moveSpaceFive:
+            String(localized: "Move to Desktop 5")
+        case .moveSpaceSix:
+            String(localized: "Move to Desktop 6")
+        case .moveSpaceSeven:
+            String(localized: "Move to Desktop 7")
+        case .moveSpaceEight:
+            String(localized: "Move to Desktop 8")
+        case .moveSpaceNine:
+            String(localized: "Move to Desktop 9")
         case .larger:
             String(localized: "Make Larger")
         case .smaller:
@@ -659,6 +705,7 @@ enum WindowAction: Int, Codable {
         switch self {
         case .center, .centerProminently, .nextDisplay, .previousDisplay, .focusNextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine,
+             .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive, .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine: return false
         case .moveUp, .moveDown, .moveLeft, .moveRight: return Defaults.resizeOnDirectionalMove.enabled
@@ -679,7 +726,7 @@ enum WindowAction: Int, Codable {
         switch self {
         case .restore, .previousDisplay, .nextDisplay, .focusNextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine,
-             .moveUp, .moveDown, .moveLeft, .moveRight, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .larger, .smaller, .largerWidth, .smallerWidth, .cascadeActiveApp, .tileActiveApp,
+             .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive, .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine, .moveUp, .moveDown, .moveLeft, .moveRight, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .larger, .smaller, .largerWidth, .smallerWidth, .cascadeActiveApp, .tileActiveApp,
             // Ninths
             .topLeftNinth, .topCenterNinth, .topRightNinth, .middleLeftNinth, .middleCenterNinth, .middleRightNinth, .bottomLeftNinth, .bottomCenterNinth, .bottomRightNinth,
             // Corner thirds
@@ -762,7 +809,8 @@ enum WindowAction: Int, Codable {
         case .prevSpace: return NSImage(imageLiteralResourceName: "prevDisplayTemplate")
         case .switchNextSpace: return NSImage(imageLiteralResourceName: "nextDisplayTemplate")
         case .switchPrevSpace: return NSImage(imageLiteralResourceName: "prevDisplayTemplate")
-        case .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine: return NSImage(imageLiteralResourceName: "nextDisplayTemplate")
+        case .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine,
+             .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive, .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine: return NSImage(imageLiteralResourceName: "nextDisplayTemplate")
         case .larger: return NSImage(imageLiteralResourceName: "makeLargerTemplate")
         case .smaller: return NSImage(imageLiteralResourceName: "makeSmallerTemplate")
         case .bottomHalf: return NSImage(imageLiteralResourceName: "bottomHalfTemplate")
@@ -929,7 +977,7 @@ enum WindowAction: Int, Codable {
             return Defaults.applyGapsToMaximizeHeight.userDisabled ? .none : .vertical;
         case .almostMaximize, .previousDisplay, .nextDisplay, .focusNextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine,
-             .larger, .smaller, .largerWidth, .smallerWidth, .largerHeight, .smallerHeight, .center, .centerProminently, .restore, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .cascadeActiveApp, .tileActiveApp,
+             .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive, .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine, .larger, .smaller, .largerWidth, .smallerWidth, .largerHeight, .smallerHeight, .center, .centerProminently, .restore, .specified, .reverseAll, .tileAll, .tileRows, .tileColumns, .cascadeAll, .cascadeActiveApp, .tileActiveApp,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine:
             return .none
@@ -944,6 +992,7 @@ enum WindowAction: Int, Codable {
              .restore,
              .nextDisplay, .previousDisplay, .focusNextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine,
+             .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive, .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine,
              .moveLeft, .moveRight, .moveUp, .moveDown,
@@ -990,6 +1039,7 @@ enum WindowAction: Int, Codable {
             return .size
         case .previousDisplay, .nextDisplay, .focusNextDisplay, .nextSpace, .prevSpace, .switchNextSpace, .switchPrevSpace,
              .switchSpaceOne, .switchSpaceTwo, .switchSpaceThree, .switchSpaceFour, .switchSpaceFive, .switchSpaceSix, .switchSpaceSeven, .switchSpaceEight, .switchSpaceNine,
+             .moveSpaceOne, .moveSpaceTwo, .moveSpaceThree, .moveSpaceFour, .moveSpaceFive, .moveSpaceSix, .moveSpaceSeven, .moveSpaceEight, .moveSpaceNine,
              .displayOne, .displayTwo, .displayThree, .displayFour, .displayFive,
              .displaySix, .displaySeven, .displayEight, .displayNine:
             return .display

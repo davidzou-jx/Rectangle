@@ -27873,6 +27873,42 @@
         }
       }
     },
+    "Move to Desktop 1" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 2" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 3" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 4" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 5" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 6" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 7" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 8" : {
+      "extractionState" : "manual"
+    },
+    "Move to Desktop 9" : {
+      "extractionState" : "manual"
+    },
+    "Switch to the destination desktop after a numbered window move" : {
+      "extractionState" : "manual"
+    },
+    "Applies to Next Space and Previous Space" : {
+      "extractionState" : "manual"
+    },
+    "Applies to Move to Desktop 1–9" : {
+      "extractionState" : "manual"
+    },
     "Switch to Desktop 1" : {
       "extractionState" : "manual"
     },

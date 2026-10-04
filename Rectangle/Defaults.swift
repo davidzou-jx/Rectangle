@@ -96,6 +96,7 @@ class Defaults {
     static let moveCursorAcrossDisplays = OptionalBoolDefault(key: "moveCursorAcrossDisplays")
     static let moveCursor = OptionalBoolDefault(key: "moveCursor")
     static let followMovedWindowToSpace = OptionalBoolDefault(key: "followMovedWindowToSpace")
+    static let followMovedWindowToNumberedSpace = OptionalBoolDefault(key: "followMovedWindowToNumberedSpace")
     static let autoMaximize = OptionalBoolDefault(key: "autoMaximize")
     static let applyGapsToMaximize = OptionalBoolDefault(key: "applyGapsToMaximize")
     static let applyGapsToMaximizeHeight = OptionalBoolDefault(key: "applyGapsToMaximizeHeight")
@@ -207,6 +208,7 @@ class Defaults {
         moveCursorAcrossDisplays,
         moveCursor,
         followMovedWindowToSpace,
+        followMovedWindowToNumberedSpace,
         autoMaximize,
         applyGapsToMaximize,
         applyGapsToMaximizeHeight,

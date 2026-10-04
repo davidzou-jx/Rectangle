@@ -1055,6 +1055,7 @@ class BridgedSpaceManagerTests: XCTestCase {
     private final class TestWindow: AccessibilityElement {
         var testWindowID: CGWindowID = 101
         var testFrame = CGRect(x: 100, y: 100, width: 500, height: 300)
+        var writtenFrames = [CGRect]()
         var minimized = false
         var fullscreen = false
         var sheet = false
@@ -1065,6 +1066,11 @@ class BridgedSpaceManagerTests: XCTestCase {
         override var isModal: Bool? { modal }
         override var isMinimized: Bool? { minimized }
         override var isFullScreen: Bool? { fullscreen }
+        override func setFrame(_ frame: CGRect, adjustSizeFirst: Bool = true, adjustPosition: Bool = true) {
+            writtenFrames.append(frame)
+            testFrame = frame
+        }
+
         init() { super.init(AXUIElementCreateSystemWide()) }
     }
 
@@ -1072,6 +1078,8 @@ class BridgedSpaceManagerTests: XCTestCase {
         var isAvailable = true
         var memberships: [UInt64]? = [57]
         var displayedSpace: UInt64? = 57
+        var displayedSpaces = [String: UInt64]()
+        var updateMembershipOnMove = false
         var moveResult = true
         var adjacent: AdjacentManagedSpace? = AdjacentManagedSpace(
             sourceID: 57, destinationID: 10, displayIdentifier: "secondary"
@@ -1084,12 +1092,53 @@ class BridgedSpaceManagerTests: XCTestCase {
             adjacent
         }
         func currentSpace(for displayIdentifier: String) -> UInt64? {
-            displayedSpace
+            displayedSpaces[displayIdentifier] ?? displayedSpace
         }
         func move(windowID: CGWindowID, to spaceID: UInt64) -> Bool {
             events.append("move:\(windowID):\(spaceID)")
+            if moveResult, updateMembershipOnMove { memberships = [spaceID] }
             return moveResult
         }
+    }
+
+    private final class NumberedActivationSpy: ManagedDisplaySpaceActivating {
+        let transfer: TransferSpy
+        var isAvailable = true
+        var destination: ManagedDisplaySpaceSwitch? = ManagedDisplaySpaceSwitch(
+            sourceID: 57, destinationID: 10, displayIdentifier: "secondary"
+        )
+        var visible = true
+        var acceptsSwitch = true
+        var updatesDisplay = true
+        var restoresVisibility = true
+        var requestedNumbers = [Int]()
+        init(_ transfer: TransferSpy) { self.transfer = transfer }
+        func desktop(number: Int) -> ManagedDisplaySpaceSwitch? {
+            requestedNumbers.append(number)
+            return destination
+        }
+        func currentSpace(on displayIdentifier: String) -> UInt64? { transfer.currentSpace(for: displayIdentifier) }
+        func destinationIsVisible(_ target: ManagedDisplaySpaceSwitch) -> Bool? {
+            currentSpace(on: target.displayIdentifier) == target.destinationID && visible
+        }
+        func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool {
+            transfer.events.append("direct:\(target.displayIdentifier):\(target.destinationID)")
+            if acceptsSwitch, updatesDisplay {
+                transfer.displayedSpaces[target.displayIdentifier] = target.destinationID
+                if target.destinationID == destination?.sourceID, restoresVisibility { visible = true }
+            }
+            return acceptsSwitch
+        }
+    }
+
+    private final class TestScreen: NSScreen {
+        let testFrame: CGRect
+        init(_ frame: CGRect) { testFrame = frame; super.init() }
+        override var frame: NSRect { testFrame }
+        override var visibleFrame: NSRect { testFrame }
+        override var safeAreaInsets: NSEdgeInsets { NSEdgeInsetsZero }
+        override var hash: Int { ObjectIdentifier(self).hashValue }
+        override func isEqual(_ object: Any?) -> Bool { (object as AnyObject?) === self }
     }
 
     private final class InputMonitorSpy: SpacePhysicalInputMonitoring {
@@ -1163,20 +1212,376 @@ class BridgedSpaceManagerTests: XCTestCase {
                              snapshot: SpaceWindowSnapshotProvider? = nil,
                              raise: ((AccessibilityElement, Bool) -> Void)? = nil,
                              frontmost: @escaping (CGWindowID, AdjacentManagedSpace) -> Bool? = { _, _ in true },
-                             follow: @escaping () -> Bool = { true }
-    ) -> BridgedSpaceManager {
+                             follow: @escaping () -> Bool = { true },
+                             numberedActivation: NumberedActivationSpy? = nil,
+                             numberedFollow: (() -> Bool)? = nil,
+                             sourceDisplay: String = "secondary",
+                             sourceScreen: NSScreen? = nil, destinationScreen: NSScreen? = nil,
+                             dragging: Bool = false) -> BridgedSpaceManager {
         BridgedSpaceManager(
             transfer: transfer, switcher: switcher ?? SwitchSpy(transfer: transfer), scheduler: scheduler.schedule,
             frontWindowProvider: focusedWindow ?? { window },
             windowSnapshotProvider: snapshot ?? { _ in
                 SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame, level: 0, isOnScreen: true)
             },
-            accessibilityAuthorized: { true }, screenProvider: { _ in NSScreen.screens.first },
-            displayIdentifierAtPoint: { _ in "secondary" },
+            accessibilityAuthorized: { true }, screenProvider: { _ in sourceScreen ?? NSScreen.screens.first },
+            displayIdentifierAtPoint: { _ in sourceDisplay },
             raiseWindow: raise ?? { _, activate in transfer.events.append(activate ? "raise" : "order") },
             windowIsFrontmost: frontmost, followMovedWindowProvider: follow,
+            numberedActivation: numberedActivation ?? NumberedActivationSpy(transfer),
+            followNumberedWindowProvider: numberedFollow ?? { !Defaults.followMovedWindowToNumberedSpace.userDisabled },
+            screenForDisplay: { _ in destinationScreen ?? NSScreen.screens.first }, mousePressed: { dragging },
             coordinator: coordinator, physicalInputMonitor: input
         )
+    }
+
+    func testNumberedMoveCommandsHaveSeparateStableMetadataAndNoDefaultBindings() {
+        XCTAssertEqual(WindowAction.numberedSpaceMoves.count, 9)
+        XCTAssertTrue(Set(WindowAction.numberedSpaceMoves).isDisjoint(with: WindowAction.numberedSpaceSwitches))
+        for (index, action) in WindowAction.numberedSpaceMoves.enumerated() {
+            XCTAssertEqual(action.rawValue, 145 + index)
+            XCTAssertEqual(action.moveDesktopNumber, index + 1)
+            XCTAssertNil(action.desktopNumber)
+            XCTAssertEqual(action.displayName, "Move to Desktop \(index + 1)")
+            XCTAssertTrue(WindowAction.active.contains(action))
+            XCTAssertFalse(action.resizes)
+            XCTAssertFalse(action.isDragSnappable)
+            XCTAssertFalse(action.positionCycles)
+            XCTAssertEqual(action.gapsApplicable, .none)
+            XCTAssertEqual(action.classification, .display)
+            XCTAssertNil(action.spectacleDefault)
+            XCTAssertNil(action.alternateDefault)
+        }
+        XCTAssertNil(WindowAction.switchSpaceOne.moveDesktopNumber)
+        XCTAssertEqual(Set(WindowAction.numberedSpaceMoves.map(\.name)).count, 9)
+    }
+
+    func testNumberedMoveOnlyUsesResolvedIDWithoutSwitching() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.adjacent = nil
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        activation.destination = ManagedDisplaySpaceSwitch(sourceID: 57, destinationID: 9001, displayIdentifier: "secondary")
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { false })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceFive)))
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(activation.requestedNumbers, [5])
+        XCTAssertEqual(transfer.memberships, [9001])
+        XCTAssertEqual(transfer.currentSpace(for: "secondary"), 57)
+        XCTAssertEqual(transfer.events, ["move:101:9001", "order"])
+    }
+
+    func testNumberedFollowSubmitsSwitchImmediatelyAndWaitsForWindowArrival() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        let activation = NumberedActivationSpy(transfer)
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  coordinator: coordinator, numberedActivation: activation, numberedFollow: { true })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceNine)))
+        XCTAssertEqual(transfer.events, ["move:101:10", "direct:secondary:10"])
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        XCTAssertNil(coordinator.begin())
+        scheduler.runNext()
+        XCTAssertFalse(transfer.events.contains("raise"))
+        transfer.memberships = [10]
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(activation.requestedNumbers, [9])
+        XCTAssertEqual(transfer.events.last, "raise")
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testNumberedFollowDoesNotRaiseWhenOnlySpaceMetadataChanges() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        activation.visible = false
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { true })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        for _ in 0..<5 { scheduler.runNext() }
+        XCTAssertFalse(transfer.events.contains("raise"))
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        activation.visible = true
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.events.last, "raise")
+    }
+
+    func testNumberedFollowRestoresTheMovedWindowAfterAutomaticFocusChange() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow(), other = TestWindow()
+        other.testWindowID = 202
+        var focused: AccessibilityElement? = other
+        transfer.updateMembershipOnMove = true
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  focusedWindow: { focused }, raise: { element, activate in
+            XCTAssertTrue(activate)
+            transfer.events.append("raise")
+            focused = element
+        }, numberedFollow: { true })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceTwo, windowElement: window)))
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(focused?.windowId, 101)
+        XCTAssertEqual(transfer.events.filter { $0 == "raise" }.count, 1)
+    }
+
+    func testNumberedMissingAndCurrentDesktopDoNothing() {
+        for missing in [true, false] {
+            let transfer = TransferSpy(), scheduler = MoveScheduler()
+            let activation = NumberedActivationSpy(transfer)
+            activation.destination = missing ? nil : ManagedDisplaySpaceSwitch(
+                sourceID: 57, destinationID: 57, displayIdentifier: "secondary")
+            let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                      numberedActivation: activation, numberedFollow: { true })
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+            XCTAssertTrue(transfer.events.isEmpty)
+            XCTAssertTrue(scheduler.actions.isEmpty)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+        }
+    }
+
+    func testNumberedFollowPreferenceIsIndependentOfAdjacentMoves() {
+        let adjacent = Defaults.followMovedWindowToSpace.enabled
+        let numbered = Defaults.followMovedWindowToNumberedSpace.enabled
+        defer {
+            Defaults.followMovedWindowToSpace.enabled = adjacent
+            Defaults.followMovedWindowToNumberedSpace.enabled = numbered
+        }
+        XCTAssertTrue(Defaults.array.contains { $0.key == Defaults.followMovedWindowToNumberedSpace.key })
+        for follows in [false, true] {
+            Defaults.followMovedWindowToSpace.enabled = !follows
+            Defaults.followMovedWindowToNumberedSpace.enabled = follows
+            let transfer = TransferSpy(), scheduler = MoveScheduler()
+            transfer.updateMembershipOnMove = true
+            let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                      follow: { !Defaults.followMovedWindowToSpace.userDisabled })
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceThree)))
+            scheduler.runUntil { !manager.isSpaceActionInProgress }
+            XCTAssertEqual(transfer.events.contains("direct:secondary:10"), follows)
+            XCTAssertEqual(transfer.events.last, follows ? "raise" : "order")
+            XCTAssertEqual(Defaults.followMovedWindowToSpace.enabled, !follows)
+        }
+    }
+
+    func testNumberedMoveRejectsUnsafeWindowsAndMembershipsBeforeSubmission() {
+        for scenario in 0..<8 {
+            let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow()
+            switch scenario {
+            case 0: transfer.memberships = [57, 99]
+            case 1: transfer.memberships = nil
+            case 2: transfer.memberships = [99]
+            case 3: window.minimized = true
+            case 4: window.fullscreen = true
+            case 5: window.sheet = true
+            case 6: window.modal = true
+            default: break
+            }
+            let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                      numberedFollow: { true }, dragging: scenario == 7)
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+            XCTAssertTrue(transfer.events.isEmpty)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+        }
+    }
+
+    func testNumberedMoveRequiresTransferAndFollowRequiresActivation() {
+        for scenario in 0..<3 {
+            let transfer = TransferSpy(), scheduler = MoveScheduler()
+            transfer.updateMembershipOnMove = true
+            let activation = NumberedActivationSpy(transfer)
+            transfer.isAvailable = scenario != 0
+            activation.isAvailable = false
+            let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                      numberedActivation: activation, numberedFollow: { scenario != 2 })
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+            if scenario == 2 {
+                scheduler.runUntil { !manager.isSpaceActionInProgress }
+                XCTAssertEqual(transfer.events, ["move:101:10", "order"])
+            } else {
+                XCTAssertTrue(transfer.events.isEmpty)
+                XCTAssertFalse(manager.isSpaceActionInProgress)
+            }
+        }
+    }
+
+    func testNumberedCrossDisplayMoveKeepsWindowSourceAndDisplaySourceDistinct() {
+        for follows in [false, true] {
+            let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow()
+            transfer.updateMembershipOnMove = true
+            transfer.displayedSpaces = ["main": 57, "secondary": 300]
+            let activation = NumberedActivationSpy(transfer)
+            activation.destination = ManagedDisplaySpaceSwitch(sourceID: 300, destinationID: 10, displayIdentifier: "secondary")
+            let source = TestScreen(CGRect(x: 0, y: 0, width: 1200, height: 800))
+            let destination = TestScreen(CGRect(x: 1200, y: 0, width: 800, height: 600))
+            window.testFrame = source.frame.insetBy(dx: 100, dy: 100).screenFlipped
+            let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                      numberedActivation: activation, numberedFollow: { follows },
+                                      sourceDisplay: "main", sourceScreen: source, destinationScreen: destination)
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceSeven)))
+            scheduler.runUntil { !manager.isSpaceActionInProgress }
+            XCTAssertEqual(transfer.memberships, [10])
+            XCTAssertEqual(transfer.currentSpace(for: "main"), 57)
+            XCTAssertEqual(transfer.currentSpace(for: "secondary"), follows ? 10 : 300)
+            XCTAssertEqual(window.writtenFrames.count, 1)
+            XCTAssertTrue(destination.frame.screenFlipped.contains(window.frame))
+            XCTAssertEqual(transfer.events.last, follows ? "raise" : "order")
+        }
+    }
+
+    func testNumberedMoveToVisibleDesktopDoesNotRequireASwitchOperation() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        transfer.displayedSpaces = ["main": 57, "secondary": 10]
+        let activation = NumberedActivationSpy(transfer)
+        activation.isAvailable = false
+        activation.acceptsSwitch = false
+        activation.destination = ManagedDisplaySpaceSwitch(sourceID: 10, destinationID: 10, displayIdentifier: "secondary")
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { true }, sourceDisplay: "main")
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.events, ["move:101:10", "raise"])
+        XCTAssertEqual(transfer.currentSpace(for: "main"), 57)
+    }
+
+    func testNumberedCrossDisplayPlacementHonorsCenterAndMaximizeSettings() {
+        let center = Defaults.centerAcrossDisplays.enabled
+        let maximize = Defaults.autoMaximize.enabled
+        defer {
+            Defaults.centerAcrossDisplays.enabled = center
+            Defaults.autoMaximize.enabled = maximize
+        }
+        let source = TestScreen(CGRect(x: 0, y: 0, width: 1200, height: 800))
+        let destination = TestScreen(CGRect(x: 1200, y: 0, width: 2400, height: 1600))
+        for maximized in [false, true] {
+            for preserve in [false, true] {
+                Defaults.centerAcrossDisplays.enabled = true
+                Defaults.autoMaximize.enabled = preserve
+                let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow()
+                transfer.updateMembershipOnMove = true
+                transfer.displayedSpaces = ["main": 57, "secondary": 300]
+                let activation = NumberedActivationSpy(transfer)
+                activation.destination = ManagedDisplaySpaceSwitch(sourceID: 300, destinationID: 10, displayIdentifier: "secondary")
+                window.testFrame = (maximized ? source.adjustedVisibleFrame()
+                    : CGRect(x: 50, y: 50, width: 400, height: 300)).screenFlipped
+                let size = window.frame.size
+                let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                          numberedActivation: activation, numberedFollow: { false }, sourceDisplay: "main",
+                                          sourceScreen: source, destinationScreen: destination)
+                XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+                scheduler.runUntil { !manager.isSpaceActionInProgress }
+                let bounds = destination.adjustedVisibleFrame().screenFlipped
+                let expected = maximized && preserve ? bounds : CGRect(
+                    x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                    width: size.width, height: size.height)
+                XCTAssertEqual(window.frame, expected)
+            }
+        }
+    }
+
+    func testNumberedPhysicalInputAndExternalSpaceChangesCancelRestoration() {
+        for physical in [false, true] {
+            let transfer = TransferSpy(), scheduler = MoveScheduler(), input = InputMonitorSpy()
+            transfer.updateMembershipOnMove = true
+            let activation = NumberedActivationSpy(transfer)
+            activation.visible = false
+            let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                      input: input, numberedActivation: activation, numberedFollow: { true })
+            XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+            if physical { input.trigger() } else { transfer.displayedSpaces["secondary"] = 999 }
+            scheduler.runUntil { !manager.isSpaceActionInProgress }
+            XCTAssertEqual(transfer.events, ["move:101:10", "direct:secondary:10"])
+            XCTAssertNil(input.handler)
+        }
+    }
+
+    func testNumberedRejectedSwitchRestoresWindowAndRetainsTheOperationLock() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        activation.acceptsSwitch = false
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  coordinator: coordinator, numberedActivation: activation, numberedFollow: { true })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        XCTAssertEqual(transfer.events, ["move:101:10", "direct:secondary:10", "move:101:57"])
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        XCTAssertNil(coordinator.begin())
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.memberships, [57])
+        XCTAssertEqual(transfer.currentSpace(for: "secondary"), 57)
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testNumberedPartialCrossDisplaySwitchRestoresTheActualWindowSource() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow()
+        transfer.updateMembershipOnMove = true
+        transfer.displayedSpaces = ["main": 57, "secondary": 300]
+        let activation = NumberedActivationSpy(transfer)
+        activation.destination = ManagedDisplaySpaceSwitch(sourceID: 300, destinationID: 10, displayIdentifier: "secondary")
+        activation.visible = false
+        let originalFrame = window.frame
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { true }, sourceDisplay: "main")
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.memberships, [57])
+        XCTAssertEqual(transfer.displayedSpaces, ["main": 57, "secondary": 300])
+        XCTAssertEqual(transfer.events, ["move:101:10", "direct:secondary:10", "move:101:57", "direct:secondary:300"])
+        XCTAssertEqual(window.frame, originalFrame)
+    }
+
+    func testNumberedChangedWindowIsNotPositionedAfterTransfer() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow()
+        transfer.displayedSpaces = ["main": 57, "secondary": 300]
+        let activation = NumberedActivationSpy(transfer)
+        activation.destination = ManagedDisplaySpaceSwitch(sourceID: 300, destinationID: 10, displayIdentifier: "secondary")
+        let manager = makeManager(transfer: transfer, window: window, scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { false }, sourceDisplay: "main")
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        window.testWindowID = 202
+        transfer.memberships = [10]
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertTrue(window.writtenFrames.isEmpty)
+        XCTAssertEqual(transfer.events, ["move:101:10"])
+    }
+
+    func testNumberedRecoveryWaitsForRestoredVisibilityBeforeReleasingTheLock() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        activation.visible = false
+        activation.restoresVisibility = false
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  coordinator: coordinator, numberedActivation: activation, numberedFollow: { true })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        scheduler.runUntil { transfer.events.contains("direct:secondary:57") }
+        for _ in 0..<5 { scheduler.runNext() }
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        XCTAssertNil(coordinator.begin())
+        activation.visible = true
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.memberships, [57])
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testNumberedStaleRecoveryCallbackCannotAffectANewerMove() throws {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        activation.acceptsSwitch = false
+        let manager = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { true })
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        let stale = try XCTUnwrap(scheduler.actions.first)
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
+        activation.acceptsSwitch = true
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.moveSpaceTwo)))
+        let events = transfer.events
+        stale()
+        XCTAssertEqual(transfer.events, events)
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        scheduler.runUntil { !manager.isSpaceActionInProgress }
     }
 
     func testUserFocusChangeCancelsDestinationRestoration() {
@@ -7645,6 +8050,24 @@ class ShortcutManagerSessionTests: XCTestCase {
         XCTAssertTrue(moves.actions.isEmpty)
         XCTAssertTrue(gestures.actions.isEmpty)
         XCTAssertTrue(harness.bindingStore.boundKeys.contains(WindowAction.switchSpaceOne.name))
+    }
+
+    func testNumberedMoveCommandsBindAndRouteToTheWindowMoveManager() {
+        let moves = SpaceActionSpy(handledActions: Set(WindowAction.numberedSpaceMoves))
+        let gestures = SpaceActionSpy(handledActions: [.switchNextSpace, .switchPrevSpace])
+        let numbered = SpaceActionSpy(handledActions: Set(WindowAction.numberedSpaceSwitches))
+        let shortcuts = Dictionary(uniqueKeysWithValues: WindowAction.numberedSpaceMoves.enumerated().map {
+            ($0.element, shortcut(18 + $0.offset))
+        })
+        let harness = makeHarness(shortcuts: shortcuts, spaceManager: moves,
+                                  spaceSwitcher: gestures, numberedSpaceSwitcher: numbered)
+        for action in WindowAction.numberedSpaceMoves {
+            harness.notificationCenter.post(name: action.notificationName, object: ExecutionParameters(action))
+        }
+        XCTAssertEqual(moves.actions, WindowAction.numberedSpaceMoves)
+        XCTAssertEqual(numbered.actions, WindowAction.numberedSpaceMoves)
+        XCTAssertTrue(gestures.actions.isEmpty)
+        XCTAssertEqual(harness.bindingStore.boundKeys, Set(WindowAction.numberedSpaceMoves.map(\.name)))
     }
 
     func testActiveSessionResignThenDelayedActivationRestoresBindings() {
