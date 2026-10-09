@@ -53,6 +53,11 @@ protocol SpacePhysicalInputMonitoring: AnyObject {
 final class SpacePhysicalInputMonitor: SpacePhysicalInputMonitoring {
     private var globalMonitor: Any?
     private var localMonitor: Any?
+    private let ignoringEvent: (NSEvent) -> Bool
+
+    init(ignoringEvent: @escaping (NSEvent) -> Bool = { _ in false }) {
+        self.ignoringEvent = ignoringEvent
+    }
 
     func start(_ handler: @escaping () -> Void) {
         stop()
@@ -62,8 +67,9 @@ final class SpacePhysicalInputMonitor: SpacePhysicalInputMonitoring {
             .otherMouseDown, .otherMouseUp, .otherMouseDragged,
             .scrollWheel, .keyDown, .swipe, .gesture, .beginGesture, .endGesture
         ]
-        let handle: (NSEvent) -> Void = { event in
-            guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != spaceMoveSyntheticEventTag else {
+        let handle: (NSEvent) -> Void = { [ignoringEvent] event in
+            guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != spaceMoveSyntheticEventTag,
+                  !ignoringEvent(event) else {
                 return
             }
             DispatchQueue.main.async(execute: handler)

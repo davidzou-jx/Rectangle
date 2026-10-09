@@ -126,7 +126,8 @@ final class SkyLightDisplaySpaceActivation: ManagedDisplaySpaceActivating {
     }
 
     func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool {
-        guard isAvailable, currentSpace(on: target.displayIdentifier) == target.sourceID,
+        guard isAvailable, target.sourceID != 0, target.destinationID != 0,
+              currentSpace(on: target.displayIdentifier) == target.sourceID,
               let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces(),
               let display = displays.first(where: { ($0["Display Identifier"] as? String) == target.displayIdentifier }),
               let spaces = display["Spaces"] as? [[String: Any]],
@@ -172,8 +173,19 @@ final class NumberedSpaceSwitcher: SpaceActionExecuting {
     private let accessibilityAuthorized: () -> Bool
     private let mousePressed: () -> Bool
     private let inputMonitor: SpacePhysicalInputMonitoring
+    private let clock: () -> TimeInterval
+    private let workspaceNotificationCenter: NotificationCenter
+    private var spaceObserver: NSObjectProtocol?
     private var operation: SpaceOperationCoordinator.Operation?
+    private var target: ManagedDisplaySpaceSwitch?
     private var interrupted = false
+    private var recovering = false
+    private var deadline: TimeInterval = 0
+    private var stableSamples = 0
+    private var lastSampleTime: TimeInterval?
+    private var pollScheduled = false
+    private var completion: ((Bool) -> Void)?
+    private var ownershipIsValid: () -> Bool = { true }
     private var executionID: UInt64 = 0
     var isSpaceActionInProgress: Bool { operation != nil }
 
@@ -184,78 +196,147 @@ final class NumberedSpaceSwitcher: SpaceActionExecuting {
          },
          accessibilityAuthorized: @escaping () -> Bool = AXIsProcessTrusted,
          mousePressed: @escaping () -> Bool = { CGEventSource.buttonState(.combinedSessionState, button: .left) },
-         inputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor()) {
+         inputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor(),
+         clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter) {
         self.activation = activation
         self.coordinator = coordinator
         self.scheduler = scheduler
         self.accessibilityAuthorized = accessibilityAuthorized
         self.mousePressed = mousePressed
         self.inputMonitor = inputMonitor
+        self.clock = clock
+        self.workspaceNotificationCenter = workspaceNotificationCenter
+        spaceObserver = workspaceNotificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.confirm() }
     }
 
     func execute(parameters: ExecutionParameters) -> Bool {
         guard let number = parameters.action.desktopNumber else { return false }
-        guard !isSpaceActionInProgress, !mousePressed(), let operation = coordinator.begin() else { return true }
-        guard activation.isAvailable, accessibilityAuthorized() else {
-            NSSound.beep()
-            Logger.log("Direct desktop switching requires the bridged Space operations and Accessibility permission")
-            return true
-        }
-        guard let target = activation.desktop(number: number), target.sourceID != target.destinationID else { return true }
-        self.operation = operation
-        interrupted = false
-        executionID &+= 1
-        let id = executionID
-        inputMonitor.start { [weak self] in self?.interrupted = true }
-        guard activation.activate(target) else {
-            finish()
-            Logger.log("Unable to submit the direct desktop switch")
-            NSSound.beep()
-            return true
-        }
-        scheduler(0.05) { [weak self] in self?.confirm(target, poll: 0, stablePolls: 0, id: id) }
+        guard let target = activation.desktop(number: number) else { return true }
+        start(target, continuing: nil, ownershipIsValid: { true }, completion: nil)
         return true
     }
 
-    private func confirm(_ target: ManagedDisplaySpaceSwitch, poll: Int, stablePolls: Int, id: UInt64,
-                         recovering: Bool = false) {
-        guard isSpaceActionInProgress, executionID == id else { return }
-        guard coordinator.canContinue else { finish(); return }
+    func switchSpace(to target: ManagedDisplaySpaceSwitch,
+                     continuing operation: SpaceOperationCoordinator.Operation,
+                     ownershipIsValid: @escaping () -> Bool = { true },
+                     completion: @escaping (Bool) -> Void) {
+        start(target, continuing: operation, ownershipIsValid: ownershipIsValid, completion: completion)
+    }
+
+    private func start(_ target: ManagedDisplaySpaceSwitch,
+                       continuing operation: SpaceOperationCoordinator.Operation?,
+                       ownershipIsValid: @escaping () -> Bool,
+                       completion: ((Bool) -> Void)?) {
+        guard !isSpaceActionInProgress, !mousePressed(),
+              let operation = coordinator.begin(continuing: operation) else { completion?(false); return }
+        guard activation.isAvailable, accessibilityAuthorized() else {
+            NSSound.beep()
+            Logger.log("Direct desktop switching requires the bridged Space operations and Accessibility permission")
+            completion?(false)
+            return
+        }
+        guard target.sourceID != target.destinationID else { completion?(true); return }
+        self.operation = operation
+        self.completion = completion
+        self.ownershipIsValid = ownershipIsValid
+        self.target = target
+        interrupted = false
+        recovering = false
+        stableSamples = 0
+        lastSampleTime = nil
+        pollScheduled = false
+        deadline = clock() + 1.5
+        executionID &+= 1
+        inputMonitor.start { [weak self] in self?.interrupt() }
+        guard activation.activate(target) else {
+            finish(success: false)
+            Logger.log("Unable to submit the direct desktop switch")
+            NSSound.beep()
+            return
+        }
+        scheduleConfirmation()
+    }
+
+    // A submitted bridged operation cannot be cancelled. Retain its lease until
+    // it settles, but discard queued intent and never undo the user's choice.
+    func interrupt() { interrupted = true }
+
+    private func scheduleConfirmation() {
+        guard isSpaceActionInProgress, !pollScheduled else { return }
+        pollScheduled = true
+        let id = executionID
+        scheduler(0.01) { [weak self] in
+            guard let self, self.isSpaceActionInProgress, self.executionID == id else { return }
+            self.pollScheduled = false
+            self.confirm()
+        }
+    }
+
+    private func confirm() {
+        guard isSpaceActionInProgress, let target else { return }
+        if !coordinator.canContinue { interrupted = true }
+        // Validate every display before recovery, regardless of workspace
+        // observer ordering. Keep the lease while a submitted switch settles.
+        if !ownershipIsValid() { interrupted = true }
         let current = activation.currentSpace(on: target.displayIdentifier)
         if let current, current != target.sourceID, current != target.destinationID {
             // Another switch owns this display now. Never switch it back.
-            finish()
+            finish(success: false)
             return
         }
-        let stable = current == target.destinationID && activation.destinationIsVisible(target) == true
-            ? stablePolls + 1 : 0
-        if stable >= 3 { finish(); return }
-        guard poll < 30 else {
+        let now = clock()
+        if current == target.destinationID && activation.destinationIsVisible(target) == true {
+            // Multiple notifications in one run-loop turn are one sample.
+            if lastSampleTime.map({ now - $0 >= 0.01 - 0.000001 }) ?? true {
+                stableSamples += 1
+                lastSampleTime = now
+            }
+        } else {
+            stableSamples = 0
+            lastSampleTime = nil
+        }
+        if stableSamples >= 3 { finish(success: !recovering && !interrupted); return }
+        guard now < deadline else {
             Logger.log("Direct desktop switch did not settle on its destination")
             if !recovering, !interrupted, current == target.destinationID {
                 // A partial Show/Hide/SetCurrent must not strand visible windows
                 // from two desktops. Restore only while our destination is current.
                 let original = target.reversed
+                // Arm recovery before submission: a workspace notification may
+                // arrive from the activation call itself.
+                self.target = original
+                recovering = true
+                stableSamples = 0
+                lastSampleTime = nil
+                deadline = clock() + 1.5
                 if activation.activate(original) {
-                    scheduler(0.05) { [weak self] in
-                        self?.confirm(original, poll: 0, stablePolls: 0, id: id, recovering: true)
-                    }
+                    scheduleConfirmation()
                     return
                 }
             }
-            finish()
+            finish(success: false)
             NSSound.beep()
             return
         }
-        scheduler(0.05) { [weak self] in
-            self?.confirm(target, poll: poll + 1, stablePolls: stable, id: id, recovering: recovering)
-        }
+        scheduleConfirmation()
     }
 
-    private func finish() {
+    private func finish(success: Bool) {
         inputMonitor.stop()
+        let completion = self.completion
+        self.completion = nil
+        ownershipIsValid = { true }
+        target = nil
+        pollScheduled = false
         operation = nil
+        completion?(success)
     }
 
-    deinit { inputMonitor.stop() }
+    deinit {
+        inputMonitor.stop()
+        if let spaceObserver { workspaceNotificationCenter.removeObserver(spaceObserver) }
+    }
 }

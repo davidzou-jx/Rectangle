@@ -128,6 +128,14 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
     private let currentSpaceProvider: (NSScreen?) -> UInt64?
     private let leftMouseButtonPressed: () -> Bool
     private let physicalInputMonitor: SpacePhysicalInputMonitoring
+    private let clock: () -> TimeInterval
+    private let workspaceNotificationCenter: NotificationCenter
+    private var spaceObserver: NSObjectProtocol?
+    private var confirmationScreen: NSScreen?
+    private var expectedDestination: UInt64?
+    private var confirmationDeadline: TimeInterval = 0
+    private var confirmationScheduled = false
+    private var completion: ((Bool) -> Void)?
     private var operation: SpaceOperationCoordinator.Operation?
     private var initialSpaceID: UInt64?
     private var gestureStarted = false
@@ -152,7 +160,7 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
                 direction: direction, at: point, scope: .all
             )
         },
-        settleDelay: TimeInterval = 0.06,
+        settleDelay: TimeInterval = 0.01,
         coordinator: SpaceOperationCoordinator = .shared,
         currentSpaceProvider: @escaping (NSScreen?) -> UInt64? = { screen in
             guard let point = screen.map({ $0.frame.screenFlipped.centerPoint })
@@ -162,7 +170,9 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
         leftMouseButtonPressed: @escaping () -> Bool = {
             CGEventSource.buttonState(.combinedSessionState, button: .left)
         },
-        physicalInputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor()
+        physicalInputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor(),
+        clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter
     ) {
         self.eventPoster = eventPoster
         self.scheduler = scheduler
@@ -172,6 +182,14 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
         self.currentSpaceProvider = currentSpaceProvider
         self.leftMouseButtonPressed = leftMouseButtonPressed
         self.physicalInputMonitor = physicalInputMonitor
+        self.clock = clock
+        self.workspaceNotificationCenter = workspaceNotificationCenter
+        spaceObserver = workspaceNotificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.gestureEnded else { return }
+            self.confirmSpaceChange(executionID: self.executionID)
+        }
     }
 
     func execute(parameters: ExecutionParameters) -> Bool {
@@ -185,6 +203,26 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
     func execute(parameters: ExecutionParameters,
                  continuing operation: SpaceOperationCoordinator.Operation?,
                  beforeSwitch: (() -> Void)?) -> Bool {
+        start(parameters: parameters, continuing: operation, beforeSwitch: beforeSwitch,
+              destinationID: nil, completion: nil)
+    }
+
+    /// The burst controller resolves the exact adjacent destination before
+    /// posting a gesture. A different Space change must not advance its queue.
+    func switchSpace(parameters: ExecutionParameters, destinationID: UInt64,
+                     continuing operation: SpaceOperationCoordinator.Operation,
+                     completion: @escaping (Bool) -> Void) {
+        _ = start(parameters: parameters, continuing: operation, beforeSwitch: nil,
+                  destinationID: destinationID, completion: completion)
+    }
+
+    private func start(parameters: ExecutionParameters,
+                       continuing operation: SpaceOperationCoordinator.Operation?,
+                       beforeSwitch: (() -> Void)?, destinationID: UInt64?,
+                       completion: ((Bool) -> Void)?) -> Bool {
+        // Preflight failures also complete resolved requests synchronously.
+        var started = false
+        defer { if !started { completion?(false) } }
         guard let direction = SpaceDirection(switchAction: parameters.action) else {
             return false
         }
@@ -249,8 +287,13 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
         self.operation = operation
         self.initialSpaceID = initialSpaceID
         self.beforeSwitch = beforeSwitch
+        self.expectedDestination = destinationID
+        self.completion = completion
+        confirmationScreen = targetScreen
+        confirmationScheduled = false
         gestureStarted = false
         gestureEnded = false
+        started = true
         physicalInputMonitor.start { [weak self] in
             self?.finish(executionID: currentExecutionID, restoreCursor: false)
         }
@@ -289,7 +332,10 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
             return
         }
         if phase == .began { gestureStarted = true }
-        if phase == .ended { gestureEnded = true }
+        if phase == .ended {
+            gestureEnded = true
+            confirmationDeadline = clock() + 1.5
+        }
 
         let nextIndex = index + 1
         if SpaceGesturePhase.allCases.indices.contains(nextIndex) {
@@ -302,29 +348,37 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
                 postPhase(at: nextIndex, screen: screen, executionID: executionID)
             }
         } else {
-            scheduler(settleDelay) { [weak self] in
-                self?.confirmSpaceChange(screen: screen, poll: 0, executionID: executionID)
-            }
+            scheduleConfirmation(after: settleDelay, executionID: executionID)
         }
     }
 
-    private func confirmSpaceChange(screen: NSScreen?, poll: Int, executionID: UInt64) {
-        guard switchInProgress, self.executionID == executionID else { return }
+    private func scheduleConfirmation(after delay: TimeInterval = 0.01, executionID: UInt64) {
+        guard !confirmationScheduled else { return }
+        confirmationScheduled = true
+        scheduler(delay) { [weak self] in
+            guard let self, self.switchInProgress, self.executionID == executionID else { return }
+            self.confirmationScheduled = false
+            self.confirmSpaceChange(executionID: executionID)
+        }
+    }
+
+    private func confirmSpaceChange(executionID: UInt64) {
+        guard switchInProgress, gestureEnded, self.executionID == executionID else { return }
         if !coordinator.canContinue {
             finish(executionID: executionID)
-        } else if let current = currentSpaceProvider(screen), current != initialSpaceID {
-            finish(executionID: executionID)
-        } else if poll >= 30 {
+        } else if let current = currentSpaceProvider(confirmationScreen), current != initialSpaceID {
+            finish(executionID: executionID, success: expectedDestination == nil || current == expectedDestination)
+        } else if clock() >= confirmationDeadline {
             Logger.log("Space switch timed out waiting for the displayed Space to change")
             finish(executionID: executionID)
         } else {
-            scheduler(0.05) { [weak self] in
-                self?.confirmSpaceChange(screen: screen, poll: poll + 1, executionID: executionID)
-            }
+            scheduleConfirmation(executionID: executionID)
         }
     }
 
-    private func finish(executionID: UInt64, restoreCursor: Bool = true) {
+    func cancel() { finish(executionID: executionID, restoreCursor: false) }
+
+    private func finish(executionID: UInt64, restoreCursor: Bool = true, success: Bool = false) {
         guard switchInProgress, self.executionID == executionID else { return }
         if gestureStarted, !gestureEnded {
             _ = eventPoster.post(.ended)
@@ -339,15 +393,22 @@ final class SpaceSwitcher: DisplaySpaceSwitching {
         originalMouseLocation = nil
         warpedMouseLocation = nil
         beforeSwitch = nil
+        let completion = self.completion
+        self.completion = nil
+        expectedDestination = nil
+        confirmationScreen = nil
+        confirmationScheduled = false
         eventPoster.discardPreparedEvents()
         switchInProgress = false
         initialSpaceID = nil
         gestureStarted = false
         gestureEnded = false
         operation = nil
+        completion?(success)
     }
 
     deinit {
+        if let spaceObserver { workspaceNotificationCenter.removeObserver(spaceObserver) }
         if switchInProgress {
             finish(executionID: executionID)
         } else {

@@ -204,6 +204,27 @@ class GridLimitDefaultsTests: XCTestCase {
 }
 
 class SpaceOperationCoordinatorTests: XCTestCase {
+
+    func testOnlyVerifiedSwitchesCanBypassNativeSettling() throws {
+        var now: TimeInterval = 1
+        let notifications = NotificationCenter()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, clock: { now },
+                                                    workspaceNotificationCenter: notifications)
+        var operation: SpaceOperationCoordinator.Operation? = try XCTUnwrap(coordinator.begin())
+        notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        coordinator.verifiedSwitch(try XCTUnwrap(operation), currentState: ["A": 57, "B": 90])
+        operation = nil
+        XCTAssertNil(coordinator.begin()) // Window moves keep the native quiet period.
+        XCTAssertNil(coordinator.beginSwitch(currentState: ["A": 58, "B": 90]))
+        var next: SpaceOperationCoordinator.Operation? = coordinator.beginSwitch(currentState: ["A": 57, "B": 90])
+        XCTAssertNotNil(next)
+        coordinator.verifiedSwitch(try XCTUnwrap(next), currentState: ["A": 57, "B": 90])
+        next = nil
+        coordinator.invalidateVerifiedSwitch()
+        XCTAssertNil(coordinator.beginSwitch(currentState: ["A": 57, "B": 90]))
+        now += 0.2
+        XCTAssertNotNil(coordinator.beginSwitch(currentState: ["A": 57, "B": 90]))
+    }
     func testOnlyTheOwningMoveCanContinueItsOperation() throws {
         let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
         var operation = try XCTUnwrap(coordinator.begin())
@@ -2670,11 +2691,12 @@ class SpaceSwitcherTests: XCTestCase {
 
     private final class SchedulerSpy {
         private(set) var delays = [TimeInterval]()
-        private var actions = [() -> Void]()
+        private var actions = [(TimeInterval, () -> Void)]()
+        var now: TimeInterval = 0
 
         func schedule(delay: TimeInterval, action: @escaping () -> Void) {
             delays.append(delay)
-            actions.append(action)
+            actions.append((now + delay, action))
         }
 
         func runNext(file: StaticString = #filePath, line: UInt = #line) {
@@ -2682,7 +2704,9 @@ class SpaceSwitcherTests: XCTestCase {
                 XCTFail("Expected a scheduled Space switch phase", file: file, line: line)
                 return
             }
-            actions.removeFirst()()
+            let (time, action) = actions.removeFirst()
+            now = max(now, time)
+            action()
         }
     }
 
@@ -2700,7 +2724,8 @@ class SpaceSwitcherTests: XCTestCase {
                               input: InputMonitorSpy = InputMonitorSpy()) -> SpaceSwitcher {
         SpaceSwitcher(eventPoster: poster, scheduler: scheduler.schedule, neighborAvailable: { _, _ in true },
                       coordinator: coordinator, currentSpaceProvider: currentSpace ?? { _ in poster.currentSpaceID },
-                      leftMouseButtonPressed: mousePressed, physicalInputMonitor: input)
+                      leftMouseButtonPressed: mousePressed, physicalInputMonitor: input, clock: { scheduler.now },
+                      workspaceNotificationCenter: NotificationCenter())
     }
 
     func testFollowedTransferRunsImmediatelyBeforeTheCommittingGesturePhase() {
@@ -2876,7 +2901,10 @@ class SpaceSwitcherTests: XCTestCase {
         let scheduler = SchedulerSpy()
         let switcher = makeSwitcher(poster: poster, scheduler: scheduler, coordinator: coordinator)
         XCTAssertTrue(switcher.execute(parameters: ExecutionParameters(.switchNextSpace)))
-        for _ in 0..<33 { scheduler.runNext() }
+        for _ in 0..<160 {
+            if !switcher.isSpaceActionInProgress { break }
+            scheduler.runNext()
+        }
         XCTAssertFalse(switcher.isSpaceActionInProgress)
         XCTAssertNotNil(coordinator.begin())
         XCTAssertEqual(poster.phases, [.began, .changed, .ended])
@@ -2949,7 +2977,7 @@ class SpaceSwitcherTests: XCTestCase {
         scheduler.runNext()
         scheduler.runNext()
         XCTAssertEqual(poster.phases, [.began, .changed, .ended])
-        XCTAssertEqual(scheduler.delays, [0.01, 0.01, 0.06])
+        XCTAssertEqual(scheduler.delays, [0.01, 0.01, 0.01])
 
         scheduler.runNext()
         XCTAssertEqual(poster.discardCount, 1)
@@ -7941,8 +7969,7 @@ class ShortcutManagerSessionTests: XCTestCase {
         appDisabled: Bool = false,
         shortcuts: [WindowAction: MASShortcut]? = nil,
         spaceManager: SpaceActionExecuting = SpaceManager(),
-        spaceSwitcher: SpaceActionExecuting = SpaceSwitcher(),
-        numberedSpaceSwitcher: SpaceActionExecuting = NumberedSpaceSwitcher()
+        spaceSwitcher: SpaceActionExecuting = SpaceSwitchManager()
     ) -> Harness {
         let bindingStore = BindingStoreSpy()
         let notificationCenter = NotificationCenter()
@@ -7955,7 +7982,6 @@ class ShortcutManagerSessionTests: XCTestCase {
             windowManager: WindowManager(),
             spaceManager: spaceManager,
             spaceSwitcher: spaceSwitcher,
-            numberedSpaceSwitcher: numberedSpaceSwitcher,
             bindingStore: bindingStore,
             notificationCenter: notificationCenter,
             workspaceNotificationCenter: workspaceNotificationCenter,
@@ -8034,39 +8060,57 @@ class ShortcutManagerSessionTests: XCTestCase {
             object: ExecutionParameters(.switchNextSpace)
         )
 
-        XCTAssertEqual(spaceManager.actions, [.switchNextSpace])
+        XCTAssertTrue(spaceManager.actions.isEmpty)
         XCTAssertEqual(spaceSwitcher.actions, [.switchNextSpace])
+    }
+
+    func testRepeatInputPolicyTracksStandaloneBindingsAndSessionSuspension() {
+        let repeated = shortcut(124)
+        let shared = shortcut(123)
+        let harness = makeHarness(shortcuts: [.switchNextSpace: repeated, .switchPrevSpace: shared,
+                                             .leftHalf: shared, .nextSpace: shortcut(125),
+                                             .switchSpaceOne: shortcut(18)])
+        let expected: Set<SpaceSwitchShortcutPolicy.Shortcut> = [
+            .init(keyCode: 124, modifiers: [.command, .option]),
+            .init(keyCode: 18, modifiers: [.command, .option])
+        ]
+        // Cycles and window-move shortcuts continue to interrupt a switch.
+        XCTAssertEqual(SpaceSwitchShortcutPolicy.shared.shortcuts, expected)
+        resignSession(harness)
+        XCTAssertTrue(SpaceSwitchShortcutPolicy.shared.shortcuts.isEmpty)
+        activateSession(harness)
+        XCTAssertTrue(SpaceSwitchShortcutPolicy.shared.shortcuts.isEmpty)
+        harness.scheduler.runNext()
+        XCTAssertEqual(SpaceSwitchShortcutPolicy.shared.shortcuts, expected)
+        harness.manager.unbindShortcuts()
+        XCTAssertTrue(SpaceSwitchShortcutPolicy.shared.shortcuts.isEmpty)
     }
 
     func testNumberedSpaceCommandRoutesWithoutObtainingOrMovingAWindow() {
         let moves = SpaceActionSpy()
-        let gestures = SpaceActionSpy(handledActions: [.switchNextSpace, .switchPrevSpace])
         let numbered = SpaceActionSpy(handledActions: Set(WindowAction.numberedSpaceSwitches))
         let harness = makeHarness(shortcuts: [.switchSpaceOne: shortcut(18)], spaceManager: moves,
-                                  spaceSwitcher: gestures, numberedSpaceSwitcher: numbered)
+                                  spaceSwitcher: numbered)
         harness.notificationCenter.post(name: WindowAction.switchSpaceOne.notificationName,
                                         object: ExecutionParameters(.switchSpaceOne))
         XCTAssertEqual(numbered.actions, [.switchSpaceOne])
         XCTAssertTrue(moves.actions.isEmpty)
-        XCTAssertTrue(gestures.actions.isEmpty)
         XCTAssertTrue(harness.bindingStore.boundKeys.contains(WindowAction.switchSpaceOne.name))
     }
 
     func testNumberedMoveCommandsBindAndRouteToTheWindowMoveManager() {
         let moves = SpaceActionSpy(handledActions: Set(WindowAction.numberedSpaceMoves))
-        let gestures = SpaceActionSpy(handledActions: [.switchNextSpace, .switchPrevSpace])
         let numbered = SpaceActionSpy(handledActions: Set(WindowAction.numberedSpaceSwitches))
         let shortcuts = Dictionary(uniqueKeysWithValues: WindowAction.numberedSpaceMoves.enumerated().map {
             ($0.element, shortcut(18 + $0.offset))
         })
         let harness = makeHarness(shortcuts: shortcuts, spaceManager: moves,
-                                  spaceSwitcher: gestures, numberedSpaceSwitcher: numbered)
+                                  spaceSwitcher: numbered)
         for action in WindowAction.numberedSpaceMoves {
             harness.notificationCenter.post(name: action.notificationName, object: ExecutionParameters(action))
         }
         XCTAssertEqual(moves.actions, WindowAction.numberedSpaceMoves)
         XCTAssertEqual(numbered.actions, WindowAction.numberedSpaceMoves)
-        XCTAssertTrue(gestures.actions.isEmpty)
         XCTAssertEqual(harness.bindingStore.boundKeys, Set(WindowAction.numberedSpaceMoves.map(\.name)))
     }
 
@@ -9935,10 +9979,14 @@ class NumberedSpaceSwitcherTests: XCTestCase {
     }
     private final class Scheduler {
         var actions = [() -> Void]()
-        func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) { actions.append(action) }
+        var now: TimeInterval = 0
+        func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) {
+            let time = now + delay
+            actions.append { self.now = max(self.now, time); action() }
+        }
         func next() { if !actions.isEmpty { actions.removeFirst()() } }
         func drain() {
-            for _ in 0..<100 {
+            for _ in 0..<400 {
                 if actions.isEmpty { return }
                 next()
             }
@@ -9958,7 +10006,8 @@ class NumberedSpaceSwitcherTests: XCTestCase {
                           authorized: Bool = true, mousePressed: Bool = false) -> NumberedSpaceSwitcher {
         NumberedSpaceSwitcher(activation: activation, coordinator: coordinator ?? self.coordinator(),
                               scheduler: scheduler.schedule, accessibilityAuthorized: { authorized },
-                              mousePressed: { mousePressed }, inputMonitor: input)
+                              mousePressed: { mousePressed }, inputMonitor: input, clock: { scheduler.now },
+                              workspaceNotificationCenter: NotificationCenter())
     }
     func testNumberedCommandsHaveDistinctStableMetadataAndNoDefaultBindings() {
         for (index, action) in WindowAction.numberedSpaceSwitches.enumerated() {
@@ -10065,7 +10114,7 @@ class NumberedSpaceSwitcherTests: XCTestCase {
         activation.visible = false
         let manager = switcher(activation, scheduler, coordinator: coordinator)
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.switchSpaceOne)))
-        for _ in 0..<31 { scheduler.next() }
+        while activation.calls.count < 2 && scheduler.now < 1.52 { scheduler.next() }
         XCTAssertEqual(activation.calls.count, 2)
         XCTAssertEqual(activation.calls[1], activation.calls[0].reversed)
         XCTAssertTrue(manager.isSpaceActionInProgress)
@@ -10107,5 +10156,436 @@ class NumberedSpaceSwitcherTests: XCTestCase {
         activation.visible = true
         scheduler.drain()
         XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+}
+
+class SpaceSwitchManagerTests: XCTestCase {
+    private final class Scheduler {
+        var now: TimeInterval = 1
+        var actions = [(TimeInterval, () -> Void)]()
+        func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) {
+            actions.append((now + delay, action))
+        }
+        func next() {
+            guard let index = actions.indices.min(by: { actions[$0].0 < actions[$1].0 }) else { return }
+            let (time, action) = actions.remove(at: index)
+            now = max(now, time)
+            action()
+        }
+        func drain(file: StaticString = #filePath, line: UInt = #line) {
+            for _ in 0..<1000 {
+                if actions.isEmpty { return }
+                next()
+            }
+            XCTFail("Space switch burst did not finish", file: file, line: line)
+        }
+    }
+    private final class Input: SpacePhysicalInputMonitoring {
+        var handler: (() -> Void)?
+        func start(_ handler: @escaping () -> Void) { self.handler = handler }
+        func stop() { handler = nil }
+    }
+    private final class Fixture {
+        let scheduler = Scheduler()
+        let notifications = NotificationCenter()
+        let input = Input(), directInput = Input(), gestureInput = Input()
+        var safe = true
+        var authorized = true
+        var mousePressed = false
+        var selectedDisplay = "A"
+        var current: [String: UInt64] = ["A": 10, "B": 90]
+        var order: [(String, [(UInt64, Int)])] = [("A", [(10, 0), (20, 0), (30, 0)]), ("B", [(90, 0), (100, 0)])]
+        var malformed = false
+        var available = true
+        var visible: Bool? = true
+        var accepts = true
+        var updateImmediately = true
+        var notifyOnActivation = false
+        var calls = [ManagedDisplaySpaceSwitch]()
+        var phases = [SpaceGesturePhase]()
+        var screen: NSScreen? // Direct tests never warp the real pointer.
+        lazy var coordinator = SpaceOperationCoordinator(environmentIsSafe: { [unowned self] in self.safe },
+                                                          clock: { [unowned self] in self.scheduler.now },
+                                                          workspaceNotificationCenter: notifications)
+        lazy var activation = Activation(self)
+        lazy var poster = Poster(self)
+        var raw: [[String: Any]] {
+            order.map { identifier, spaces in
+                ["Display Identifier": identifier, "Current Space": ["id64": current[identifier] ?? 0],
+                 "Spaces": spaces.map { id, type -> [String: Any] in
+                     malformed && id == 20 ? ["type": type] : ["id64": id, "type": type]
+                 }]
+            }
+        }
+        func makeManager() -> SpaceSwitchManager {
+            SpaceSwitchManager(activation: activation, coordinator: coordinator,
+                               topologyProvider: { [unowned self] in self.raw },
+                               displayProvider: { [unowned self] _ in self.selectedDisplay },
+                               screenProvider: { [unowned self] _ in self.screen },
+                               scheduler: scheduler.schedule, clock: { [unowned self] in self.scheduler.now },
+                               accessibilityAuthorized: { [unowned self] in self.authorized },
+                               mousePressed: { [unowned self] in self.mousePressed },
+                               inputMonitor: input, directInputMonitor: directInput, gestureInputMonitor: gestureInput,
+                               eventPoster: poster, workspaceNotificationCenter: notifications)
+        }
+        func notify() { notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil) }
+    }
+    private final class Activation: ManagedDisplaySpaceActivating {
+        unowned let fixture: Fixture
+        init(_ fixture: Fixture) { self.fixture = fixture }
+        var isAvailable: Bool { fixture.available }
+        func desktop(number: Int) -> ManagedDisplaySpaceSwitch? { ManagedSpaceTopology.desktop(number: number, in: fixture.raw) }
+        func currentSpace(on displayIdentifier: String) -> UInt64? { fixture.current[displayIdentifier] }
+        func destinationIsVisible(_ target: ManagedDisplaySpaceSwitch) -> Bool? { fixture.visible }
+        func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool {
+            fixture.calls.append(target)
+            if fixture.accepts && fixture.updateImmediately { fixture.current[target.displayIdentifier] = target.destinationID }
+            if fixture.notifyOnActivation { fixture.notify() }
+            return fixture.accepts
+        }
+    }
+    private final class Poster: DisplaySpaceSwitchEventPosting {
+        unowned let fixture: Fixture
+        var direction: SpaceDirection = .next
+        init(_ fixture: Fixture) { self.fixture = fixture }
+        var accessibilityAuthorized: Bool { fixture.authorized }
+        let phaseDelay: TimeInterval = 0.01
+        func prepare(direction: SpaceDirection) -> Bool { self.direction = direction; return true }
+        func post(_ phase: SpaceGesturePhase) -> Bool {
+            fixture.phases.append(phase)
+            if phase == .ended, let spaces = fixture.order.first(where: { $0.0 == fixture.selectedDisplay })?.1,
+               let index = spaces.firstIndex(where: { $0.0 == fixture.current[fixture.selectedDisplay] }) {
+                let next = index + (direction == .next ? 1 : -1)
+                if spaces.indices.contains(next) { fixture.current[fixture.selectedDisplay] = spaces[next].0 }
+            }
+            return true
+        }
+        func discardPreparedEvents() {}
+    }
+    private func press(_ manager: SpaceSwitchManager, _ action: WindowAction = .switchNextSpace) {
+        XCTAssertTrue(manager.execute(parameters: ExecutionParameters(action)))
+    }
+    private func cursorScreen() throws -> NSScreen {
+        let point = try XCTUnwrap(CGEvent(source: nil)?.location)
+        return try XCTUnwrap(NSScreen.screens.first(where: { $0.frame.screenFlipped.contains(point) }))
+    }
+
+    func testRapidRelativePressesCoalesceToOneBoundedDestination() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        for _ in 0..<100 { press(manager) }
+        XCTAssertEqual(f.calls.map(\.destinationID), [20])
+        XCTAssertNil(f.coordinator.begin())
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [20, 30])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertTrue(f.phases.isEmpty)
+        XCTAssertEqual(f.scheduler.now - 1, 0.06, accuracy: 0.000001)
+    }
+
+    func testBoundaryIsClampedForEachPressBeforeReversal() {
+        let f = Fixture()
+        f.current["A"] = 20
+        let manager = f.makeManager()
+        press(manager) // Commit arrival at the last desktop.
+        press(manager) // Clamp here; do not retain an impossible extra step.
+        press(manager, .switchPrevSpace)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [30, 20])
+    }
+
+    func testReverseBackToInFlightDestinationDoesNotSubmitExtraSwitch() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        press(manager)
+        press(manager, .switchPrevSpace)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [20])
+    }
+
+    func testDelayedCurrentIDsDoNotLoseOrOvershootIntent() {
+        let f = Fixture()
+        f.updateImmediately = false
+        let manager = f.makeManager()
+        press(manager)
+        press(manager)
+        press(manager)
+        XCTAssertEqual(f.current["A"], 10)
+        f.current["A"] = 20
+        f.updateImmediately = true
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.sourceID), [10, 20])
+        XCTAssertEqual(f.calls.map(\.destinationID), [20, 30])
+    }
+
+    func testLatestNumberedRequestReplacesPendingDestination() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager, .switchSpaceTwo)
+        press(manager, .switchSpaceThree)
+        press(manager, .switchSpaceOne)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [20, 10])
+    }
+
+    func testPendingDestinationsAreIndependentAndCaptureTheirDisplays() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        f.selectedDisplay = "B"
+        press(manager)
+        f.selectedDisplay = "A"
+        press(manager)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.displayIdentifier), ["A", "B", "A"])
+        XCTAssertEqual(f.calls.map(\.destinationID), [20, 100, 30])
+    }
+
+    func testVerifiedSwitchesAndQueuedHandoffsAvoidOwnNotificationCooldown() {
+        let f = Fixture()
+        f.notifyOnActivation = true
+        let manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [20, 30])
+        XCTAssertEqual(f.scheduler.now - 1, 0.04, accuracy: 0.000001) // Notification supplies first sample.
+        XCTAssertNil(f.coordinator.begin()) // Moves still observe the quiet period.
+        press(manager, .switchPrevSpace) // Fresh burst within that same period.
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [20, 30, 20])
+    }
+
+    func testNativeSpaceNotificationStillBlocksANewBurst() {
+        let f = Fixture(), manager = f.makeManager()
+        f.notify()
+        press(manager)
+        XCTAssertTrue(f.calls.isEmpty)
+        f.scheduler.now += 0.16
+        press(manager)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 1)
+    }
+
+    func testPhysicalInputCancelsPendingIntentWithoutReversingUsersChoice() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.input.handler?()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.map(\.destinationID), [20])
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testPhysicalInputAfterCompletionInvalidatesFastPath() {
+        let f = Fixture()
+        f.notifyOnActivation = true
+        let manager = f.makeManager()
+        press(manager)
+        f.scheduler.drain()
+        f.input.handler?()
+        press(manager)
+        XCTAssertEqual(f.calls.count, 1)
+        f.scheduler.now += 0.16
+        press(manager)
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 2)
+    }
+
+    func testExternalChangeOnAnotherDisplayCancelsPendingSwitchesAndRollback() {
+        let f = Fixture()
+        f.visible = false
+        let manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.current["B"] = 100
+        f.notify()
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testExternalNotificationAtDeadlineCannotStartRecoveryBeforeParentObserverRuns() {
+        let f = Fixture()
+        f.visible = false
+        let manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.scheduler.now += 1.51
+        f.current["B"] = 100
+        f.notify() // Child observers were registered before the burst controller.
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testUnexpectedDestinationNeverAdvancesQueueOrGetsReversed() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.current["A"] = 30
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testTopologyReorderingAndRemovalCancelTheBurst() {
+        for remove in [false, true] {
+            let f = Fixture(), manager = f.makeManager()
+            press(manager)
+            press(manager)
+            if remove { f.order[0].1.removeLast() } else { f.order[0].1.swapAt(0, 2) }
+            f.notify()
+            f.scheduler.drain()
+            XCTAssertEqual(f.calls.count, 1)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+        }
+    }
+
+    func testWindowMoveLeasePreventsStartingOrDeferringSwitches() throws {
+        let f = Fixture(), manager = f.makeManager()
+        let move = try XCTUnwrap(f.coordinator.begin())
+        press(manager)
+        XCTAssertTrue(f.calls.isEmpty)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        withExtendedLifetime(move) {}
+    }
+
+    func testMissionControlDraggingAndMalformedTopologyDoNotSubmit() {
+        for scenario in 0..<4 {
+            let f = Fixture()
+            f.safe = scenario != 0
+            f.mousePressed = scenario == 1
+            f.malformed = scenario == 2
+            f.authorized = scenario != 3
+            let manager = f.makeManager()
+            press(manager)
+            XCTAssertTrue(f.calls.isEmpty)
+            XCTAssertFalse(manager.isSpaceActionInProgress)
+        }
+    }
+
+    func testMissionControlDuringSwitchDropsPendingIntent() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.safe = false
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 1)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testUnsupportedDirectAPIUsesPacedGesturesWithVerifiedHandoffs() throws {
+        let f = Fixture()
+        f.available = false
+        f.visible = nil // Older systems can lack the visibility reader too.
+        f.screen = try cursorScreen()
+        let manager = f.makeManager()
+        press(manager)
+        press(manager)
+        f.scheduler.drain()
+        XCTAssertTrue(f.calls.isEmpty)
+        XCTAssertEqual(f.phases, [.began, .changed, .ended, .began, .changed, .ended])
+        XCTAssertEqual(f.current["A"], 30)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testFullScreenRelativeTransitionsUseGestureInsteadOfDirectAPI() throws {
+        let f = Fixture()
+        f.order[0].1[1] = (20, 4)
+        f.screen = try cursorScreen()
+        let manager = f.makeManager()
+        press(manager)
+        f.scheduler.drain()
+        XCTAssertTrue(f.calls.isEmpty)
+        XCTAssertEqual(f.phases, [.began, .changed, .ended])
+        XCTAssertEqual(f.current["A"], 20)
+    }
+
+    func testNumberedSwitchFromFullScreenUsesVerifiedGestureSteps() throws {
+        let f = Fixture()
+        f.order[0].1[1] = (20, 4)
+        f.current["A"] = 20
+        f.screen = try cursorScreen()
+        let manager = f.makeManager()
+        press(manager, .switchSpaceOne)
+        f.scheduler.drain()
+        XCTAssertTrue(f.calls.isEmpty)
+        XCTAssertEqual(f.phases, [.began, .changed, .ended])
+        XCTAssertEqual(f.current["A"], 10)
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testNumberedUnavailableMissingAndAlreadyCurrentRequestsDoNothing() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager, .switchSpaceOne)
+        press(manager, .switchSpaceNine)
+        f.available = false
+        press(manager, .switchSpaceTwo)
+        XCTAssertTrue(f.calls.isEmpty)
+        XCTAssertTrue(f.phases.isEmpty)
+        XCTAssertFalse(manager.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertFalse(manager.execute(parameters: ExecutionParameters(.leftHalf)))
+    }
+
+    func testNotificationStormCannotReplaceTimeSeparatedVisibilitySamples() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        for _ in 0..<30 { f.notify() }
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        f.scheduler.next()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        f.scheduler.next()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+        XCTAssertEqual(f.scheduler.now - 1, 0.02, accuracy: 0.000001)
+    }
+
+    func testVisibilityFailureRetainsElapsedDeadlineAndRecoveryLock() {
+        let f = Fixture()
+        f.visible = false
+        f.notifyOnActivation = true // Including a notification during recovery submission.
+        let manager = f.makeManager()
+        press(manager)
+        press(manager)
+        while f.scheduler.now < 1.4 { f.scheduler.next() }
+        XCTAssertEqual(f.calls.count, 1)
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        while f.calls.count < 2 { f.scheduler.next() }
+        XCTAssertEqual(f.calls[1], f.calls[0].reversed)
+        XCTAssertNil(f.coordinator.begin())
+        f.visible = true
+        f.scheduler.drain()
+        XCTAssertEqual(f.calls.count, 2) // Pending intent was dropped after recovery.
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testStalePollCannotCompleteANewerBurst() {
+        let f = Fixture(), manager = f.makeManager()
+        press(manager)
+        let stale = f.scheduler.actions[0].1
+        f.scheduler.drain()
+        f.visible = false
+        press(manager)
+        stale()
+        XCTAssertTrue(manager.isSpaceActionInProgress)
+        f.visible = true
+        f.scheduler.drain()
+        XCTAssertFalse(manager.isSpaceActionInProgress)
+    }
+
+    func testOnlyMatchingSwitchKeyDownsAreRepeatIntent() throws {
+        let policy = SpaceSwitchShortcutPolicy()
+        policy.shortcuts = [SpaceSwitchShortcutPolicy.Shortcut(keyCode: 124, modifiers: [.control, .option])]
+        func event(_ code: UInt16, _ modifiers: NSEvent.ModifierFlags, _ type: NSEvent.EventType = .keyDown) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                                          windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                                          isARepeat: true, keyCode: code))
+        }
+        XCTAssertTrue(policy.matches(try event(124, [.control, .option])))
+        XCTAssertTrue(policy.matches(try event(124, [.control, .option, .capsLock, .numericPad, .function])))
+        XCTAssertFalse(policy.matches(try event(124, [.control, .option, .shift])))
+        XCTAssertFalse(policy.matches(try event(123, [.control, .option])))
+        XCTAssertFalse(policy.matches(try event(124, [.control, .option], .keyUp)))
+        policy.shortcuts.removeAll()
+        XCTAssertFalse(policy.matches(try event(124, [.control, .option])))
     }
 }

@@ -16,6 +16,8 @@ final class SpaceOperationCoordinator {
     private let quietPeriod: TimeInterval
     private var lastSpaceChange: TimeInterval?
     private var spaceObserver: NSObjectProtocol?
+    private var verifiedSwitchState: [String: UInt64]?
+    private var verifiedSwitchTime: TimeInterval?
 
     init(environmentIsSafe: @escaping () -> Bool = { !WindowAnimationInterruptionPolicy.missionControlActive },
          clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -33,6 +35,7 @@ final class SpaceOperationCoordinator {
         }
     }
 
+    var isOperationInProgress: Bool { activeOperation != nil }
     var canContinue: Bool { environmentIsSafe() }
 
     func begin(continuing operation: Operation? = nil) -> Operation? {
@@ -55,7 +58,33 @@ final class SpaceOperationCoordinator {
         }
         let operation = Operation()
         activeOperation = operation
+        invalidateVerifiedSwitch()
         return operation
+    }
+
+    // Only switch-only callers can reuse a recently verified topology. Window
+    // moves still use begin(), including its protection around native changes.
+    func beginSwitch(currentState: [String: UInt64]) -> Operation? {
+        guard canContinue, activeOperation == nil else { return nil }
+        if verifiedSwitchState == currentState, let verifiedSwitchTime,
+           clock() - verifiedSwitchTime < quietPeriod * 2 {
+            let operation = Operation()
+            activeOperation = operation
+            invalidateVerifiedSwitch()
+            return operation
+        }
+        return begin()
+    }
+
+    func verifiedSwitch(_ operation: Operation, currentState: [String: UInt64]) {
+        guard activeOperation === operation else { return }
+        verifiedSwitchState = currentState
+        verifiedSwitchTime = clock()
+    }
+
+    func invalidateVerifiedSwitch() {
+        verifiedSwitchState = nil
+        verifiedSwitchTime = nil
     }
 
     deinit {

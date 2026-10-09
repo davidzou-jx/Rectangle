@@ -38,7 +38,6 @@ class ShortcutManager {
     private let displayFocusManager: DisplayFocusManager
     private let spaceManager: SpaceActionExecuting
     private let spaceSwitcher: SpaceActionExecuting
-    private let numberedSpaceSwitcher: SpaceActionExecuting
     private let bindingStore: ShortcutBindingStore
     private let notificationCenter: NotificationCenter
     private let workspaceNotificationCenter: NotificationCenter
@@ -58,8 +57,7 @@ class ShortcutManager {
         windowManager: WindowManager,
         screenDetection: ScreenDetection = ScreenDetection(),
         spaceManager: SpaceActionExecuting = BridgedSpaceManager(),
-        spaceSwitcher: SpaceActionExecuting = SpaceSwitcher(),
-        numberedSpaceSwitcher: SpaceActionExecuting = NumberedSpaceSwitcher(),
+        spaceSwitcher: SpaceActionExecuting = SpaceSwitchManager(),
         bindingStore: ShortcutBindingStore = MASShortcutBindingStore(),
         notificationCenter: NotificationCenter = .default,
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
@@ -82,7 +80,6 @@ class ShortcutManager {
         self.displayFocusManager = DisplayFocusManager(screenDetection: screenDetection)
         self.spaceManager = spaceManager
         self.spaceSwitcher = spaceSwitcher
-        self.numberedSpaceSwitcher = numberedSpaceSwitcher
         self.bindingStore = bindingStore
         self.notificationCenter = notificationCenter
         self.workspaceNotificationCenter = workspaceNotificationCenter
@@ -125,6 +122,12 @@ class ShortcutManager {
 
         let shortcutsByAction = shortcutsProvider()
         let groups = ShortcutCycle.groups(shortcutsByAction: shortcutsByAction)
+        SpaceSwitchShortcutPolicy.shared.shortcuts = Set(groups.compactMap { group in
+            let action = group.representativeAction
+            guard !group.isCycle, action.desktopNumber != nil || SpaceDirection(switchAction: action) != nil,
+                  let shortcut = shortcutsByAction[action] else { return nil }
+            return SpaceSwitchShortcutPolicy.Shortcut(keyCode: shortcut.keyCode, modifiers: shortcut.modifierFlags)
+        })
 
         shortcutIdentities = ShortcutCycle.shortcutIdentities(shortcutsByAction: shortcutsByAction)
 
@@ -151,6 +154,7 @@ class ShortcutManager {
         }
 
         boundShortcutActions.removeAll()
+        SpaceSwitchShortcutPolicy.shared.shortcuts.removeAll()
     }
 
     public func getKeyEquivalent(action: WindowAction) -> (String?, NSEvent.ModifierFlags)? {
@@ -222,7 +226,7 @@ class ShortcutManager {
             return
         }
 
-        if numberedSpaceSwitcher.execute(parameters: parameters) {
+        if spaceSwitcher.execute(parameters: parameters) {
             return
         }
 
@@ -230,9 +234,8 @@ class ShortcutManager {
             return
         }
 
-        if spaceSwitcher.execute(parameters: parameters) {
-            return
-        }
+        guard SpaceOperationCoordinator.shared.canContinue,
+              !SpaceOperationCoordinator.shared.isOperationInProgress else { return }
 
         if MultiWindowManager.execute(parameters: parameters) {
             return
