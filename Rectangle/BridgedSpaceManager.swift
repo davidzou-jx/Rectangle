@@ -17,13 +17,42 @@ enum ManagedSpaceScope: Equatable {
 /// The order in `Spaces` is the Mission Control order for one display. Space
 /// IDs are not necessarily consecutive, and other displays have separate rows.
 enum ManagedSpaceTopology {
+    /// Reject incomplete snapshots as a whole; compacting missing IDs can turn
+    /// a damaged entry into a different adjacent or numbered destination.
+    static func isValid(_ displays: [[String: Any]]) -> Bool {
+        guard !displays.isEmpty else { return false }
+        var identifiers = Set<String>()
+        for display in displays {
+            guard let identifier = display["Display Identifier"] as? String, !identifier.isEmpty,
+                  identifiers.insert(identifier).inserted,
+                  let current = display["Current Space"] as? [String: Any],
+                  let currentNumber = current["id64"] as? NSNumber, let currentID = spaceID(currentNumber),
+                  let spaces = display["Spaces"] as? [[String: Any]], !spaces.isEmpty else { return false }
+            var ids = Set<UInt64>()
+            for space in spaces {
+                guard let number = space["id64"] as? NSNumber, let id = spaceID(number),
+                      ids.insert(id).inserted,
+                      let type = space["type"] as? NSNumber,
+                      let integerType = Int(exactly: type.doubleValue), integerType >= 0 else { return false }
+            }
+            guard ids.contains(currentID) else { return false }
+        }
+        return true
+    }
+
+    private static func spaceID(_ number: NSNumber) -> UInt64? {
+        guard let id = UInt64(exactly: number.doubleValue), id > 0,
+              NSNumber(value: id) == number else { return nil }
+        return id
+    }
+
     static func hasAdjacentDisplayedSpace(
         on displayIdentifier: String,
         direction: SpaceDirection,
         scope: ManagedSpaceScope,
         in displays: [[String: Any]]
     ) -> Bool? {
-        guard let display = displays.first(where: {
+        guard isValid(displays), let display = displays.first(where: {
             ($0["Display Identifier"] as? String) == displayIdentifier
         }),
         let current = display["Current Space"] as? [String: Any],
@@ -47,7 +76,7 @@ enum ManagedSpaceTopology {
         on displayIdentifier: String,
         in displays: [[String: Any]]
     ) -> AdjacentManagedSpace? {
-        guard sourceIDs.count == 1, let sourceID = sourceIDs.first else { return nil }
+        guard isValid(displays), sourceIDs.count == 1, let sourceID = sourceIDs.first else { return nil }
         guard let display = displays.first(where: {
             ($0["Display Identifier"] as? String) == displayIdentifier
         }),
@@ -70,10 +99,22 @@ enum ManagedSpaceTopology {
 
     static func currentSpace(for displayIdentifier: String,
                              in displays: [[String: Any]]) -> UInt64? {
-        guard let display = displays.first(where: {
+        guard isValid(displays), let display = displays.first(where: {
             ($0["Display Identifier"] as? String) == displayIdentifier
         }), let current = display["Current Space"] as? [String: Any] else { return nil }
         return (current["id64"] as? NSNumber)?.uint64Value
+    }
+
+    static func adjacentForGesture(to sourceIDs: [UInt64], direction: SpaceDirection,
+                                   on displayIdentifier: String, in displays: [[String: Any]]) -> AdjacentManagedSpace? {
+        guard let target = adjacent(to: sourceIDs, direction: direction, on: displayIdentifier, in: displays),
+              let display = displays.first(where: { ($0["Display Identifier"] as? String) == displayIdentifier }),
+              let spaces = display["Spaces"] as? [[String: Any]],
+              let index = spaces.firstIndex(where: { ($0["id64"] as? NSNumber)?.uint64Value == target.sourceID }) else { return nil }
+        let next = index + (direction == .next ? 1 : -1)
+        guard spaces.indices.contains(next),
+              (spaces[next]["id64"] as? NSNumber)?.uint64Value == target.destinationID else { return nil }
+        return target
     }
 }
 
@@ -211,7 +252,7 @@ enum SpaceWindowOrder {
     static func isFrontmost(windowID: CGWindowID, in windows: [WindowInfo],
                             onDestination: (CGWindowID) -> Bool?) -> Bool? {
         let candidates = windows.filter {
-            $0.level == 0 && $0.alpha > 0 && !$0.frame.isEmpty && !$0.frame.isNull
+            $0.level == 0 && $0.alpha > 0 && $0.frame.isFiniteAndNonEmpty
                 && !["Dock", "WindowManager", "Notification Center"].contains($0.processName)
         }
         guard candidates.contains(where: { $0.id == windowID }) else { return nil }
@@ -273,7 +314,17 @@ final class SkyLightWindowSpaceTransfer: WindowSpaceTransferring {
         )
             && framework != nil && connection != nil
             && copyManagedDisplaySpaces != nil && copySpacesForWindows != nil
-            && NSClassFromString("SLSBridgedMoveWindowsToManagedSpaceOperation") != nil
+            && Self.operationClass != nil
+    }
+
+    private static var operationClass: AnyClass? {
+        guard let cls = NSClassFromString("SLSBridgedMoveWindowsToManagedSpaceOperation") else { return nil }
+        for (name, encoding) in [("initWithWindows:spaceID:", "@32@0:8@16Q24"),
+                                 ("performWithWMBridgeDelegate", "v16@0:8")] {
+            guard let method = class_getInstanceMethod(cls, NSSelectorFromString(name)),
+                  let actual = method_getTypeEncoding(method), String(cString: actual) == encoding else { return nil }
+        }
+        return cls
     }
 
     func spaces(for windowID: CGWindowID) -> [UInt64]? {
@@ -301,8 +352,14 @@ final class SkyLightWindowSpaceTransfer: WindowSpaceTransferring {
     }
 
     func move(windowID: CGWindowID, to spaceID: UInt64) -> Bool {
-        guard isAvailable,
-              let operationClass = NSClassFromString("SLSBridgedMoveWindowsToManagedSpaceOperation")
+        guard isAvailable, windowID != 0, spaceID != 0,
+              let displays = managedDisplaySpaces(), ManagedSpaceTopology.isValid(displays),
+              displays.contains(where: { display in
+                  (display["Spaces"] as? [[String: Any]])?.contains {
+                      ($0["id64"] as? NSNumber)?.uint64Value == spaceID && ($0["type"] as? NSNumber)?.intValue == 0
+                  } == true
+              }),
+              let operationClass = Self.operationClass
         else { return false }
 
         let initSelector = NSSelectorFromString("initWithWindows:spaceID:")
@@ -312,11 +369,11 @@ final class SkyLightWindowSpaceTransfer: WindowSpaceTransferring {
             allocated.responds(to: initSelector)
         else { return false }
 
-        typealias InitFunction = @convention(c) (AnyObject, Selector, NSArray, UInt64) -> AnyObject
+        typealias InitFunction = @convention(c) (AnyObject, Selector, NSArray, UInt64) -> AnyObject?
         let initialize = unsafeBitCast(allocated.method(for: initSelector), to: InitFunction.self)
-        let operation = initialize(allocated, initSelector,
-                                   [NSNumber(value: windowID)] as NSArray, spaceID)
-        guard operation.responds(to: performSelector) else { return false }
+        guard let operation = initialize(allocated, initSelector,
+                                         [NSNumber(value: windowID)] as NSArray, spaceID),
+              operation.responds(to: performSelector) else { return false }
         typealias PerformFunction = @convention(c) (AnyObject, Selector) -> Void
         let perform = unsafeBitCast(operation.method(for: performSelector), to: PerformFunction.self)
         perform(operation, performSelector)
@@ -334,10 +391,11 @@ final class SkyLightWindowSpaceTransfer: WindowSpaceTransferring {
 /// Adjacent moves commit with the gesture; numbered moves submit directly with
 /// their optional desktop activation. Verify membership, visibility, and order.
 final class BridgedSpaceManager: SpaceActionExecuting {
-    private struct NumberedMove {
+    private struct MoveContext {
         let displaySwitch: ManagedDisplaySpaceSwitch
         let sourceDisplayIdentifier: String
         let originalFrame: CGRect
+        let activation: ManagedDisplaySpaceActivating
         var destinationFrame: CGRect?
     }
 
@@ -354,6 +412,9 @@ final class BridgedSpaceManager: SpaceActionExecuting {
     private let windowIsFrontmost: (CGWindowID, AdjacentManagedSpace) -> Bool?
     private let followMovedWindowProvider: () -> Bool
     private let numberedActivation: ManagedDisplaySpaceActivating
+    private let adjacentActivation: ManagedDisplaySpaceActivating
+    private let gestureTargetIsAdjacent: (AdjacentManagedSpace, SpaceDirection) -> Bool
+    private let cancelWindowAnimation: (AccessibilityElement) -> Void
     private let followNumberedWindowProvider: () -> Bool
     private let screenForDisplay: (String) -> NSScreen?
     private let mousePressed: () -> Bool
@@ -363,8 +424,16 @@ final class BridgedSpaceManager: SpaceActionExecuting {
     private var userInterrupted = false
     private var moveInProgress = false
     private var transferRequested = false
-    private var numberedMove: NumberedMove?
+    private var moveContext: MoveContext?
     private var executionID: UInt64 = 0
+    private var usesDirectSwitch = false
+    private var displaySwitchSubmitted = false
+    private var membershipVerified = false
+    private var displayVerified = false
+    private var draining = false
+    private var recovering = false
+    private var activeTarget: AdjacentManagedSpace?
+    private var activeWindowID: CGWindowID?
     private let pollDelay: TimeInterval = 0.05
     private let maxPolls = 20
 
@@ -410,7 +479,14 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         },
         mousePressed: @escaping () -> Bool = { CGEventSource.buttonState(.combinedSessionState, button: .left) },
         coordinator: SpaceOperationCoordinator = .shared,
-        physicalInputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor()
+        physicalInputMonitor: SpacePhysicalInputMonitoring = SpacePhysicalInputMonitor(),
+        adjacentActivation: ManagedDisplaySpaceActivating? = nil,
+        gestureTargetIsAdjacent: @escaping (AdjacentManagedSpace, SpaceDirection) -> Bool = { target, direction in
+            guard let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces() else { return false }
+            return ManagedSpaceTopology.adjacentForGesture(to: [target.sourceID], direction: direction,
+                on: target.displayIdentifier, in: displays) == target
+        },
+        cancelWindowAnimation: @escaping (AccessibilityElement) -> Void = { WindowAnimator.shared.cancel(for: $0) }
     ) {
         self.transfer = transfer
         self.switcher = switcher ?? SpaceSwitcher(coordinator: coordinator)
@@ -433,6 +509,9 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         }
         self.followMovedWindowProvider = followMovedWindowProvider
         self.numberedActivation = numberedActivation
+        self.adjacentActivation = adjacentActivation ?? numberedActivation
+        self.gestureTargetIsAdjacent = gestureTargetIsAdjacent
+        self.cancelWindowAnimation = cancelWindowAnimation
         self.followNumberedWindowProvider = followNumberedWindowProvider
         self.screenForDisplay = screenForDisplay
         self.mousePressed = mousePressed
@@ -444,7 +523,7 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         let direction = SpaceDirection(action: parameters.action)
         let desktopNumber = parameters.action.moveDesktopNumber
         guard direction != nil || desktopNumber != nil else { return false }
-        if desktopNumber != nil, mousePressed() { return true }
+        if mousePressed() { return true }
         guard !moveInProgress else {
             Logger.log("Ignoring overlapping bridged Space move")
             return true
@@ -470,15 +549,16 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         }
         let window = requested.topLevelElement ?? requested.windowElement ?? requested
         window.setMessagingTimeout(0.25)
+        cancelWindowAnimation(window)
         let snapshot = windowSnapshotProvider(window)
         guard window.isSheet != true, window.isModal != true,
               window.isMinimized != true, window.isFullScreen != true,
-              !window.frame.isNull,
+              window.frame.isFiniteAndNonEmpty,
               let windowID = window.windowId ?? parameters.windowId ?? snapshot?.windowId,
               let snapshot,
               snapshot.windowId == windowID,
               snapshot.isOnScreen,
-              snapshot.level == 0
+              snapshot.level == 0, snapshot.frame.isFiniteAndNonEmpty
         else {
             fail("This window cannot be moved between normal Spaces")
             return true
@@ -490,7 +570,7 @@ final class BridgedSpaceManager: SpaceActionExecuting {
             return true
         }
         let target: AdjacentManagedSpace
-        var numberedMove: NumberedMove?
+        var moveContext: MoveContext?
         if let desktopNumber {
             guard let displaySwitch = numberedActivation.desktop(number: desktopNumber) else {
                 Logger.log("Ignoring Space move: the numbered desktop does not exist")
@@ -515,6 +595,7 @@ final class BridgedSpaceManager: SpaceActionExecuting {
                     return true
                 }
                 let destinationBounds = destinationScreen.adjustedVisibleFrame().screenFlipped
+                guard destinationBounds.isFiniteAndNonEmpty else { return true }
                 let placement = DisplayTransfer.transferredRect(
                     window: snapshot.frame, source: screen.adjustedVisibleFrame().screenFlipped,
                     destination: destinationBounds
@@ -535,8 +616,8 @@ final class BridgedSpaceManager: SpaceActionExecuting {
             }
             target = AdjacentManagedSpace(sourceID: sourceID, destinationID: displaySwitch.destinationID,
                                           displayIdentifier: displaySwitch.displayIdentifier)
-            numberedMove = NumberedMove(displaySwitch: displaySwitch, sourceDisplayIdentifier: sourceDisplay,
-                                        originalFrame: snapshot.frame, destinationFrame: destinationFrame)
+            moveContext = MoveContext(displaySwitch: displaySwitch, sourceDisplayIdentifier: sourceDisplay,
+                                        originalFrame: snapshot.frame, activation: numberedActivation, destinationFrame: destinationFrame)
         } else {
             guard let direction,
                   let adjacent = transfer.adjacentSpace(for: windowID, direction: direction),
@@ -545,12 +626,29 @@ final class BridgedSpaceManager: SpaceActionExecuting {
                 return true
             }
             target = adjacent
+            moveContext = MoveContext(displaySwitch: ManagedDisplaySpaceSwitch(
+                sourceID: adjacent.sourceID, destinationID: adjacent.destinationID,
+                displayIdentifier: adjacent.displayIdentifier), sourceDisplayIdentifier: sourceDisplay,
+                originalFrame: snapshot.frame, activation: adjacentActivation, destinationFrame: nil)
+        }
+        if followMovedWindow, desktopNumber == nil, !adjacentActivation.isAvailable,
+           let direction, !gestureTargetIsAdjacent(target, direction) {
+            Logger.log("Ignoring followed move: a single gesture cannot reach the destination normal desktop")
+            return true
         }
         Logger.log("Moving window \(windowID) from Space \(target.sourceID) to \(target.destinationID)")
         moveInProgress = true
         transferRequested = false
         self.operation = operation
-        self.numberedMove = numberedMove
+        self.moveContext = moveContext
+        usesDirectSwitch = followMovedWindow && (desktopNumber != nil || adjacentActivation.isAvailable)
+        displaySwitchSubmitted = false
+        membershipVerified = false
+        displayVerified = !followMovedWindow
+        draining = false
+        recovering = false
+        activeTarget = target
+        activeWindowID = windowID
         userInterrupted = false
         executionID &+= 1
         let currentExecutionID = executionID
@@ -560,25 +658,33 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         }
         let moveWindow = { [weak self] in
             guard let self, self.moveInProgress, self.executionID == currentExecutionID,
-                  !self.userInterrupted, self.coordinator.canContinue else { return }
+                  !self.userInterrupted, self.coordinator.canContinue,
+                  window.windowId == windowID, window.isMinimized != true, window.isFullScreen != true,
+                  window.isSheet != true, window.isModal != true,
+                  self.ownsDisplays(target: target, following: followMovedWindow),
+                  self.transfer.spaces(for: windowID) == [target.sourceID] else {
+                self?.finish(success: false, executionID: currentExecutionID)
+                return
+            }
             self.transferRequested = self.transfer.move(windowID: windowID, to: target.destinationID)
             if !self.transferRequested {
                 self.fail("SkyLight did not accept the Space move")
                 self.finish(success: false, executionID: currentExecutionID)
             }
         }
-        if let numberedMove {
+        if let moveContext, desktopNumber != nil || usesDirectSwitch {
             // Submit the direct transfer and switch in the same main-queue turn.
             // Do not wait for membership confirmation before switching desktops.
             moveWindow()
             guard moveInProgress else { return true }
-            if followMovedWindow,
-               numberedMove.displaySwitch.sourceID != numberedMove.displaySwitch.destinationID,
-               !numberedActivation.activate(numberedMove.displaySwitch) {
-                fail("Window moved, but the numbered desktop switch could not be submitted")
-                recoverNumberedMove(windowID: windowID, window: window, target: target,
-                                    poll: 0, stablePolls: 0, executionID: currentExecutionID)
-                return true
+            if usesDirectSwitch, moveContext.displaySwitch.sourceID != moveContext.displaySwitch.destinationID {
+                displaySwitchSubmitted = moveContext.activation.activate(moveContext.displaySwitch)
+                if !displaySwitchSubmitted {
+                    fail("Window moved, but the destination desktop switch could not be submitted")
+                    recoverMove(windowID: windowID, window: window, target: target,
+                                poll: 0, stablePolls: 0, executionID: currentExecutionID)
+                    return true
+                }
             }
         } else if followMovedWindow, let direction {
             let action: WindowAction = direction == .next ? .switchNextSpace : .switchPrevSpace
@@ -599,14 +705,14 @@ final class BridgedSpaceManager: SpaceActionExecuting {
                             followMovedWindow: Bool,
                             poll: Int,
                             executionID: UInt64) {
-        guard moveInProgress, self.executionID == executionID else { return }
-        guard !userInterrupted, coordinator.canContinue else {
+        guard moveInProgress, !draining, self.executionID == executionID else { return }
+        guard !userInterrupted, coordinator.canContinue, ownsDisplays(target: target, following: followMovedWindow) else {
             finish(success: false, executionID: executionID)
             return
         }
-        if followMovedWindow, let numberedMove,
-           let current = numberedActivation.currentSpace(on: target.displayIdentifier),
-           current != numberedMove.displaySwitch.sourceID, current != target.destinationID {
+        if followMovedWindow, let moveContext,
+           let current = moveContext.activation.currentSpace(on: target.displayIdentifier),
+           current != moveContext.displaySwitch.sourceID, current != target.destinationID {
             finish(success: false, executionID: executionID)
             return
         }
@@ -617,8 +723,9 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         }
         if transferRequested, let memberships = transfer.spaces(for: windowID),
            memberships == [target.destinationID] {
+            membershipVerified = true
             Logger.log("Verified window \(windowID) on Space \(target.destinationID)")
-            if let destinationFrame = numberedMove?.destinationFrame {
+            if let destinationFrame = moveContext?.destinationFrame {
                 guard window.windowId == windowID, window.isMinimized != true, window.isFullScreen != true,
                       window.isSheet != true, window.isModal != true,
                       let snapshot = windowSnapshotProvider(window),
@@ -628,7 +735,7 @@ final class BridgedSpaceManager: SpaceActionExecuting {
                 }
                 // Position only after membership arrives on the other display;
                 // changing the frame on the source desktop would expose a jump.
-                numberedMove?.destinationFrame = nil
+                moveContext?.destinationFrame = nil
                 window.setFrame(destinationFrame)
             }
             if !followMovedWindow {
@@ -642,7 +749,7 @@ final class BridgedSpaceManager: SpaceActionExecuting {
         }
         guard poll < maxPolls else {
             fail("Window did not arrive on the destination Space")
-            recoverNumberedMove(windowID: windowID, window: window, target: target,
+            recoverMove(windowID: windowID, window: window, target: target,
                                 poll: 0, stablePolls: 0, executionID: executionID)
             return
         }
@@ -659,34 +766,35 @@ final class BridgedSpaceManager: SpaceActionExecuting {
                                poll: Int,
                                executionID: UInt64,
                                stablePolls: Int = 0) {
-        guard moveInProgress, self.executionID == executionID else { return }
-        guard !userInterrupted, coordinator.canContinue else {
+        guard moveInProgress, !draining, self.executionID == executionID else { return }
+        guard !userInterrupted, coordinator.canContinue, ownsDisplays(target: target, following: true) else {
             finish(success: false, executionID: executionID)
             return
         }
         let ready: Bool
         var stable = stablePolls
-        if let numberedMove {
-            let displaySwitch = numberedMove.displaySwitch
-            if let current = numberedActivation.currentSpace(on: target.displayIdentifier),
+        if usesDirectSwitch, let moveContext {
+            let displaySwitch = moveContext.displaySwitch
+            if let current = moveContext.activation.currentSpace(on: target.displayIdentifier),
                current != displaySwitch.sourceID, current != displaySwitch.destinationID {
                 finish(success: false, executionID: executionID)
                 return
             }
-            stable = numberedActivation.destinationIsVisible(displaySwitch) == true ? stable + 1 : 0
+            stable = moveContext.activation.destinationIsVisible(displaySwitch) == true ? stable + 1 : 0
             ready = stable >= 3
         } else {
             ready = !switcher.isSpaceActionInProgress
                 && transfer.currentSpace(for: target.displayIdentifier) == target.destinationID
         }
         if ready {
+            displayVerified = true
             confirmWindowOrder(target: target, window: window, windowID: windowID,
                                activate: true, poll: 0, stablePolls: 0, executionID: executionID)
             return
         }
         guard poll < maxPolls + 10 else {
             fail("Window moved, but the destination Space did not become visible")
-            recoverNumberedMove(windowID: windowID, window: window, target: target,
+            recoverMove(windowID: windowID, window: window, target: target,
                                 poll: 0, stablePolls: 0, executionID: executionID)
             return
         }
@@ -703,8 +811,8 @@ final class BridgedSpaceManager: SpaceActionExecuting {
                                     poll: Int,
                                     stablePolls: Int,
                                     executionID: UInt64) {
-        guard moveInProgress, self.executionID == executionID else { return }
-        guard !userInterrupted, coordinator.canContinue,
+        guard moveInProgress, !draining, self.executionID == executionID else { return }
+        guard !userInterrupted, coordinator.canContinue, ownsDisplays(target: target, following: activate),
               window.windowId == windowID,
               window.isMinimized != true, window.isFullScreen != true,
               window.isSheet != true, window.isModal != true,
@@ -752,49 +860,91 @@ final class BridgedSpaceManager: SpaceActionExecuting {
 
     private func finish(success: Bool, executionID: UInt64) {
         guard moveInProgress, self.executionID == executionID else { return }
+        if !success, transferRequested, !draining,
+           !membershipVerified || (displaySwitchSubmitted && !displayVerified) {
+            // WindowServer requests cannot be cancelled. Stop focus/frame work
+            // immediately but retain the lease until submitted work settles.
+            draining = true
+            physicalInputMonitor.stop()
+            drainSubmittedMove(poll: 0, stablePolls: 0, executionID: executionID)
+            return
+        }
         Logger.log("Bridged Space move finished (success: \(success))")
         moveInProgress = false
         transferRequested = false
-        numberedMove = nil
+        moveContext = nil
+        activeTarget = nil
+        activeWindowID = nil
+        draining = false
         physicalInputMonitor.stop()
         operation = nil
     }
 
-    private func recoverNumberedMove(windowID: CGWindowID, window: AccessibilityElement,
-                                     target: AdjacentManagedSpace, poll: Int, stablePolls: Int,
-                                     executionID: UInt64) {
-        guard moveInProgress, self.executionID == executionID else { return }
-        guard let numberedMove, !userInterrupted, coordinator.canContinue,
+    private func ownsDisplays(target: AdjacentManagedSpace, following: Bool) -> Bool {
+        guard let context = moveContext,
+              let current = transfer.currentSpace(for: target.displayIdentifier) else { return false }
+        if context.sourceDisplayIdentifier != target.displayIdentifier,
+           transfer.currentSpace(for: context.sourceDisplayIdentifier) != target.sourceID { return false }
+        return current == context.displaySwitch.sourceID || (following && current == target.destinationID)
+    }
+
+    private func drainSubmittedMove(poll: Int, stablePolls: Int, executionID: UInt64) {
+        guard moveInProgress, draining, self.executionID == executionID,
+              let target = activeTarget, let windowID = activeWindowID, let context = moveContext else { return }
+        let membership = recovering ? target.sourceID : target.destinationID
+        let displayTarget = recovering ? context.displaySwitch.reversed : context.displaySwitch
+        let current = context.activation.currentSpace(on: target.displayIdentifier)
+        let externalChange = current != nil && current != displayTarget.sourceID && current != displayTarget.destinationID
+        let visible = !displaySwitchSubmitted || externalChange || context.activation.destinationIsVisible(displayTarget) == true
+        let stable = transfer.spaces(for: windowID) == [membership] && visible ? stablePolls + 1 : 0
+        if stable >= 3 || poll >= maxPolls + 10 {
+            finish(success: false, executionID: executionID)
+            return
+        }
+        scheduler(pollDelay) { [weak self] in
+            self?.drainSubmittedMove(poll: poll + 1, stablePolls: stable, executionID: executionID)
+        }
+    }
+
+    private func recoverMove(windowID: CGWindowID, window: AccessibilityElement,
+                             target: AdjacentManagedSpace, poll: Int, stablePolls: Int,
+                             executionID: UInt64) {
+        guard moveInProgress, !draining, self.executionID == executionID else { return }
+        guard let moveContext, !userInterrupted, coordinator.canContinue,
               window.windowId == windowID, window.isMinimized != true, window.isFullScreen != true,
               window.isSheet != true, window.isModal != true,
               let snapshot = windowSnapshotProvider(window), snapshot.windowId == windowID, snapshot.level == 0,
+              snapshot.frame.isFiniteAndNonEmpty,
               let memberships = transfer.spaces(for: windowID),
               memberships == [target.sourceID] || memberships == [target.destinationID],
-              let current = numberedActivation.currentSpace(on: target.displayIdentifier),
-              current == numberedMove.displaySwitch.sourceID || current == target.destinationID,
-              numberedMove.sourceDisplayIdentifier == target.displayIdentifier
-                || transfer.currentSpace(for: numberedMove.sourceDisplayIdentifier) == target.sourceID else {
+              let current = moveContext.activation.currentSpace(on: target.displayIdentifier),
+              current == moveContext.displaySwitch.sourceID || current == target.destinationID,
+              moveContext.sourceDisplayIdentifier == target.displayIdentifier
+                || transfer.currentSpace(for: moveContext.sourceDisplayIdentifier) == target.sourceID else {
             finish(success: false, executionID: executionID)
             return
         }
         if poll == 0 {
+            recovering = true
             guard transfer.move(windowID: windowID, to: target.sourceID) else {
                 finish(success: false, executionID: executionID)
                 return
             }
-            if current != numberedMove.displaySwitch.sourceID,
-               !numberedActivation.activate(numberedMove.displaySwitch.reversed) {
+            if current != moveContext.displaySwitch.sourceID,
+               !moveContext.activation.activate(moveContext.displaySwitch.reversed) {
                 finish(success: false, executionID: executionID)
                 return
             }
         }
         let stable = memberships == [target.sourceID]
-            && current == numberedMove.displaySwitch.sourceID
-            && numberedActivation.destinationIsVisible(numberedMove.displaySwitch.reversed) == true
+            && current == moveContext.displaySwitch.sourceID
+            && (!displaySwitchSubmitted || moveContext.activation.destinationIsVisible(moveContext.displaySwitch.reversed) == true)
             ? stablePolls + 1 : 0
         if stable >= 3 {
-            if numberedMove.destinationFrame != nil || numberedMove.sourceDisplayIdentifier != target.displayIdentifier {
-                window.setFrame(numberedMove.originalFrame)
+            membershipVerified = true
+            displayVerified = true
+            if moveContext.destinationFrame != nil || moveContext.sourceDisplayIdentifier != target.displayIdentifier {
+                window.setFrame(moveContext.originalFrame)
             }
             finish(success: false, executionID: executionID)
             return
@@ -804,7 +954,7 @@ final class BridgedSpaceManager: SpaceActionExecuting {
             return
         }
         scheduler(pollDelay) { [weak self] in
-            self?.recoverNumberedMove(windowID: windowID, window: window, target: target,
+            self?.recoverMove(windowID: windowID, window: window, target: target,
                                       poll: poll + 1, stablePolls: stable, executionID: executionID)
         }
     }

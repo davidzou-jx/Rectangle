@@ -205,6 +205,39 @@ class GridLimitDefaultsTests: XCTestCase {
 
 class SpaceOperationCoordinatorTests: XCTestCase {
 
+    func testDisplayChangesCancelTheLeaseAndInvalidateVerifiedFastPath() throws {
+        let workspace = NotificationCenter(), app = NotificationCenter()
+        var now: TimeInterval = 1
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, clock: { now },
+            workspaceNotificationCenter: workspace, notificationCenter: app)
+        var lease: SpaceOperationCoordinator.Operation? = try XCTUnwrap(coordinator.begin())
+        coordinator.verifiedSwitch(try XCTUnwrap(lease), currentState: ["A": 10])
+        app.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        XCTAssertFalse(coordinator.canContinue)
+        XCTAssertNil(coordinator.begin(continuing: lease))
+        lease = nil
+        XCTAssertNil(coordinator.beginSwitch(currentState: ["A": 10]))
+        now += 0.16
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testSleepAndInactiveSessionBlockCommandsUntilBothReturn() throws {
+        var now: TimeInterval = 1
+        let workspace = NotificationCenter()
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, clock: { now }, workspaceNotificationCenter: workspace)
+        workspace.post(name: NSWorkspace.willSleepNotification, object: nil)
+        workspace.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
+        now += 1
+        XCTAssertNil(coordinator.begin())
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        now += 1
+        XCTAssertNil(coordinator.begin())
+        workspace.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        XCTAssertNil(coordinator.begin())
+        now += 0.16
+        XCTAssertNotNil(coordinator.begin())
+    }
+
     func testOnlyVerifiedSwitchesCanBypassNativeSettling() throws {
         var now: TimeInterval = 1
         let notifications = NotificationCenter()
@@ -263,6 +296,23 @@ class SpaceOperationCoordinatorTests: XCTestCase {
 }
 
 class SpaceManagerTests: XCTestCase {
+    private final class SpaceState {
+        var current: UInt64 = 57
+        var memberships: [UInt64]? = [57]
+        var target: AdjacentManagedSpace? = AdjacentManagedSpace(sourceID: 57, destinationID: 10, displayIdentifier: "display")
+        var automaticArrival = true
+        private let center: NotificationCenter
+        private var observer: NSObjectProtocol?
+        init(_ center: NotificationCenter) {
+            self.center = center
+            observer = center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.automaticArrival, let target = self.target else { return }
+                self.current = target.destinationID
+                self.memberships = [target.destinationID]
+            }
+        }
+        deinit { if let observer { center.removeObserver(observer) } }
+    }
 
     private final class TestElement: AccessibilityElement {
         var testWindowID: CGWindowID? = 42
@@ -442,7 +492,7 @@ class SpaceManagerTests: XCTestCase {
 
         func runUntil(
             _ condition: () -> Bool,
-            limit: Int = 30,
+            limit: Int = 100,
             file: StaticString = #filePath,
             line: UInt = #line
         ) {
@@ -467,7 +517,8 @@ class SpaceManagerTests: XCTestCase {
         windowDisplayIdentifier: @escaping (CGWindowID) -> String? = { _ in "display" },
         coordinator: SpaceOperationCoordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
         raise: @escaping (AccessibilityElement) -> Void = { _ in },
-        frontmost: @escaping (CGWindowID, String) -> Bool? = { _, _ in true }
+        frontmost: @escaping (CGWindowID, String) -> Bool? = { _, _ in true },
+        spaceState: SpaceState? = nil
     ) -> SpaceManager {
         let testWindow = window as? TestElement
         let originalFrame = testWindow?.testFrame
@@ -484,6 +535,11 @@ class SpaceManagerTests: XCTestCase {
             CGPoint(x: $0.minX + min(100, $0.width / 2), y: $0.midY)
         } ?? .zero
         let resolver = resolver ?? DragResolverSpy(points: [dragPoint])
+        let spaceState = spaceState ?? SpaceState(notificationCenter)
+        if let display = windowDisplayIdentifier(window?.windowId ?? 42), let target = spaceState.target {
+            spaceState.target = AdjacentManagedSpace(sourceID: target.sourceID, destinationID: target.destinationID,
+                                                     displayIdentifier: display)
+        }
         return SpaceManager(
             eventPoster: poster,
             physicalInputMonitor: physicalInputMonitor,
@@ -501,7 +557,9 @@ class SpaceManagerTests: XCTestCase {
             displayIdentifierAtPoint: displayIdentifierAtPoint,
             windowDisplayIdentifier: windowDisplayIdentifier,
             workspaceNotificationCenter: notificationCenter,
-            coordinator: coordinator, raiseWindow: raise, windowIsFrontmost: frontmost
+            coordinator: coordinator, raiseWindow: raise, windowIsFrontmost: frontmost,
+            targetSpaceProvider: { _, _ in spaceState.target },
+            windowSpacesProvider: { _ in spaceState.memberships }, currentSpaceProvider: { _ in spaceState.current }
         )
     }
 
@@ -524,6 +582,59 @@ class SpaceManagerTests: XCTestCase {
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
         XCTAssertEqual(poster.prepared.map(\.1), [CGPoint(x: 200, y: 115)])
         XCTAssertEqual(poster.warps, [CGPoint(x: 200, y: 115)])
+    }
+
+    func testFallbackIgnoresUnrelatedNotificationsUntilExactDesktopAndMembershipArrive() {
+        let notifications = NotificationCenter(), state = SpaceState(NotificationCenter())
+        state.automaticArrival = false
+        let poster = EventPosterSpy(mouseLocation: .zero), scheduler = SchedulerSpy()
+        var raises = 0
+        let subject = manager(poster: poster, scheduler: scheduler,
+            window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)),
+            notificationCenter: notifications, raise: { _ in raises += 1 }, spaceState: state)
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { poster.phases == [.began, .changed, .ended] }
+        notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        for _ in 0..<3 { scheduler.runNext() }
+        XCTAssertEqual(raises, 0)
+        XCTAssertTrue(poster.mouseUpPoints.isEmpty)
+        state.current = 10 // Switching without the window is still incomplete.
+        for _ in 0..<3 { scheduler.runNext() }
+        XCTAssertEqual(raises, 0)
+        state.memberships = [10]
+        scheduler.runUntil { !subject.isSpaceActionInProgress } // No notification is necessary.
+        XCTAssertEqual(raises, 1)
+    }
+
+    func testFallbackNeverRaisesAfterAnUnexpectedSpaceChange() {
+        let notifications = NotificationCenter(), state = SpaceState(NotificationCenter())
+        state.automaticArrival = false
+        let poster = EventPosterSpy(mouseLocation: .zero), scheduler = SchedulerSpy()
+        var raises = 0
+        let subject = manager(poster: poster, scheduler: scheduler,
+            window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)),
+            notificationCenter: notifications, raise: { _ in raises += 1 }, spaceState: state)
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { poster.phases == [.began, .changed, .ended] }
+        state.current = 999
+        notifications.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        XCTAssertFalse(subject.isSpaceActionInProgress)
+        XCTAssertEqual(raises, 0)
+        XCTAssertEqual(poster.mouseUpPoints.count, 1)
+    }
+
+    func testFallbackRejectsUnknownTargetAndOffscreenSnapshotBeforeMouseDown() {
+        for missingTarget in [true, false] {
+            let state = SpaceState(NotificationCenter())
+            if missingTarget { state.target = nil }
+            let poster = EventPosterSpy(mouseLocation: .zero), scheduler = SchedulerSpy()
+            let subject = manager(poster: poster, scheduler: scheduler,
+                window: TestElement(titleBarFrame: CGRect(x: 100, y: 100, width: 500, height: 30)),
+                snapshotProvider: { element in SpaceWindowSnapshot(windowId: 42, pid: element.pid, frame: element.frame,
+                                                                  level: 0, isOnScreen: missingTarget) }, spaceState: state)
+            XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+            XCTAssertTrue(poster.prepared.isEmpty)
+        }
     }
 
     func testDragFallbackRejectsWindowAssignedToAnotherDisplay() {
@@ -1225,6 +1336,12 @@ class BridgedSpaceManagerTests: XCTestCase {
         }
     }
 
+    private func unavailableActivation(_ transfer: TransferSpy) -> NumberedActivationSpy {
+        let activation = NumberedActivationSpy(transfer)
+        activation.isAvailable = false
+        return activation
+    }
+
     private func makeManager(transfer: TransferSpy, window: TestWindow, scheduler: MoveScheduler,
                              switcher: SwitchSpy? = nil,
                              coordinator: SpaceOperationCoordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
@@ -1238,8 +1355,12 @@ class BridgedSpaceManagerTests: XCTestCase {
                              numberedFollow: (() -> Bool)? = nil,
                              sourceDisplay: String = "secondary",
                              sourceScreen: NSScreen? = nil, destinationScreen: NSScreen? = nil,
-                             dragging: Bool = false) -> BridgedSpaceManager {
-        BridgedSpaceManager(
+                             dragging: Bool = false,
+                             adjacentActivation: NumberedActivationSpy? = nil,
+                             gestureTargetIsAdjacent: @escaping (AdjacentManagedSpace, SpaceDirection) -> Bool = { _, _ in true }) -> BridgedSpaceManager {
+        let gestureOnlyActivation = NumberedActivationSpy(transfer)
+        gestureOnlyActivation.isAvailable = false
+        return BridgedSpaceManager(
             transfer: transfer, switcher: switcher ?? SwitchSpy(transfer: transfer), scheduler: scheduler.schedule,
             frontWindowProvider: focusedWindow ?? { window },
             windowSnapshotProvider: snapshot ?? { _ in
@@ -1252,7 +1373,9 @@ class BridgedSpaceManagerTests: XCTestCase {
             numberedActivation: numberedActivation ?? NumberedActivationSpy(transfer),
             followNumberedWindowProvider: numberedFollow ?? { !Defaults.followMovedWindowToNumberedSpace.userDisabled },
             screenForDisplay: { _ in destinationScreen ?? NSScreen.screens.first }, mousePressed: { dragging },
-            coordinator: coordinator, physicalInputMonitor: input
+            coordinator: coordinator, physicalInputMonitor: input,
+            adjacentActivation: adjacentActivation ?? gestureOnlyActivation,
+            gestureTargetIsAdjacent: gestureTargetIsAdjacent
         )
     }
 
@@ -1275,6 +1398,88 @@ class BridgedSpaceManagerTests: XCTestCase {
         }
         XCTAssertNil(WindowAction.switchSpaceOne.moveDesktopNumber)
         XCTAssertEqual(Set(WindowAction.numberedSpaceMoves.map(\.name)).count, 9)
+    }
+
+    func testUnreachableGestureTargetDoesNotMoveWindowOrSwitchDesktop() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        let switcher = SwitchSpy(transfer: transfer)
+        let subject = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  switcher: switcher, gestureTargetIsAdjacent: { _, _ in false })
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertTrue(transfer.events.isEmpty)
+        XCTAssertNil(switcher.receivedOperation)
+        XCTAssertFalse(subject.isSpaceActionInProgress)
+    }
+
+    func testDirectAdjacentFollowMovesAndSwitchesTogetherWithoutGesture() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        let subject = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler, adjacentActivation: activation)
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+        XCTAssertEqual(transfer.events, ["move:101:10", "direct:secondary:10"])
+        scheduler.runUntil { !subject.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.events.last, "raise")
+        XCTAssertEqual(transfer.memberships, [10])
+    }
+
+    func testInterruptedSubmittedMoveKeepsLeaseUntilArrivalWithoutFocusOrRollback() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler(), input = InputMonitorSpy()
+        let activation = NumberedActivationSpy(transfer)
+        let coordinator = SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter())
+        let subject = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  coordinator: coordinator, input: input, adjacentActivation: activation)
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+        input.trigger()
+        scheduler.runNext()
+        XCTAssertTrue(subject.isSpaceActionInProgress)
+        XCTAssertNil(coordinator.begin())
+        transfer.memberships = [10]
+        scheduler.runUntil { !subject.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.events, ["move:101:10", "direct:secondary:10"])
+        XCTAssertNotNil(coordinator.begin())
+    }
+
+    func testFailedAdjacentDirectFollowRestoresWindowToItsSource() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        let activation = NumberedActivationSpy(transfer)
+        activation.acceptsSwitch = false
+        let subject = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler, adjacentActivation: activation)
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+        scheduler.runUntil { !subject.isSpaceActionInProgress }
+        XCTAssertEqual(transfer.memberships, [57])
+        XCTAssertFalse(transfer.events.contains("raise"))
+    }
+
+    func testDeferredTransferRechecksWindowAndSourceSpaceBeforeCommitting() {
+        for minimized in [true, false] {
+            let transfer = TransferSpy(), scheduler = MoveScheduler(), window = TestWindow()
+            let switcher = SwitchSpy(transfer: transfer)
+            switcher.defersCommit = true
+            let subject = makeManager(transfer: transfer, window: window, scheduler: scheduler, switcher: switcher)
+            XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.nextSpace)))
+            if minimized { window.minimized = true } else { transfer.memberships = [999] }
+            switcher.commit()
+            XCTAssertFalse(transfer.events.contains("move:101:10"))
+            switcher.finish()
+            scheduler.runUntil { !subject.isSpaceActionInProgress }
+        }
+    }
+
+    func testCrossDisplayMoveStopsRestoringFocusIfSourceDisplayChangesSpace() {
+        let transfer = TransferSpy(), scheduler = MoveScheduler()
+        transfer.updateMembershipOnMove = true
+        transfer.displayedSpaces = ["main": 57, "secondary": 300]
+        let activation = NumberedActivationSpy(transfer)
+        activation.destination = ManagedDisplaySpaceSwitch(sourceID: 300, destinationID: 10, displayIdentifier: "secondary")
+        let subject = makeManager(transfer: transfer, window: TestWindow(), scheduler: scheduler,
+                                  numberedActivation: activation, numberedFollow: { true }, sourceDisplay: "main")
+        XCTAssertTrue(subject.execute(parameters: ExecutionParameters(.moveSpaceOne)))
+        transfer.displayedSpaces["main"] = 999
+        scheduler.runUntil { !subject.isSpaceActionInProgress }
+        XCTAssertFalse(transfer.events.contains("raise"))
+        XCTAssertFalse(transfer.events.contains("move:101:57"))
     }
 
     func testNumberedMoveOnlyUsesResolvedIDWithoutSwitching() {
@@ -1872,7 +2077,7 @@ class BridgedSpaceManagerTests: XCTestCase {
             switcher.finish()
             transfer.memberships = [10]
             transfer.displayedSpace = 10
-            scheduler.runNext()
+            scheduler.runUntil { !manager.isSpaceActionInProgress }
             XCTAssertFalse(transfer.events.contains("raise"))
             XCTAssertEqual(transfer.events.contains("move:101:10"), !interruptBeforeCommit)
             XCTAssertFalse(manager.isSpaceActionInProgress)
@@ -1975,7 +2180,7 @@ class BridgedSpaceManagerTests: XCTestCase {
             transfer.memberships = [10]
             scheduler.runNext()
             transfer.displayedSpace = 10
-            scheduler.runNext()
+            scheduler.runUntil { !manager.isSpaceActionInProgress }
             XCTAssertFalse(transfer.events.contains("raise"))
         }
     }
@@ -2059,7 +2264,7 @@ class BridgedSpaceManagerTests: XCTestCase {
             },
             accessibilityAuthorized: { true },
             coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
-            physicalInputMonitor: InputMonitorSpy()
+            physicalInputMonitor: InputMonitorSpy(), adjacentActivation: unavailableActivation(transfer), gestureTargetIsAdjacent: { _, _ in true }
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.prevSpace)))
@@ -2088,7 +2293,7 @@ class BridgedSpaceManagerTests: XCTestCase {
             raiseWindow: { _, activate in transfer.events.append(activate ? "raise" : "order") }, windowIsFrontmost: { _, _ in true },
             followMovedWindowProvider: { true },
             coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
-            physicalInputMonitor: InputMonitorSpy()
+            physicalInputMonitor: InputMonitorSpy(), adjacentActivation: unavailableActivation(transfer), gestureTargetIsAdjacent: { _, _ in true }
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
@@ -2174,7 +2379,7 @@ class BridgedSpaceManagerTests: XCTestCase {
             raiseWindow: { _, activate in transfer.events.append(activate ? "raise" : "order") }, windowIsFrontmost: { _, _ in true },
             followMovedWindowProvider: { followMovedWindow },
             coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
-            physicalInputMonitor: InputMonitorSpy()
+            physicalInputMonitor: InputMonitorSpy(), adjacentActivation: unavailableActivation(transfer), gestureTargetIsAdjacent: { _, _ in true }
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
@@ -2208,7 +2413,7 @@ class BridgedSpaceManagerTests: XCTestCase {
             screenProvider: { _ in screen },
             displayIdentifierAtPoint: { _ in "main" },
             coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
-            physicalInputMonitor: InputMonitorSpy()
+            physicalInputMonitor: InputMonitorSpy(), adjacentActivation: unavailableActivation(transfer), gestureTargetIsAdjacent: { _, _ in true }
         )
 
         XCTAssertTrue(manager.execute(parameters: ExecutionParameters(.nextSpace)))
@@ -2355,6 +2560,26 @@ class SpaceDragTargetResolverTests: XCTestCase {
         )
 
         XCTAssertTrue(resolver.candidates(for: window).isEmpty)
+    }
+
+    func testCandidateRevalidationRejectsChangedHitRoleAndDisconnectedDisplay() throws {
+        let frame = CGRect(x: 100, y: 100, width: 600, height: 400)
+        let window = TestElement(role: .window, frame: frame,
+                                 titleBarFrame: CGRect(x: 100, y: 100, width: 600, height: 40))
+        let title = TestElement(role: .staticText, frame: frame)
+        let webArea = TestElement(role: NSAccessibility.Role(rawValue: "AXWebArea"), frame: frame)
+        title.testTopLevel = window; webArea.testTopLevel = window
+        var hit = title
+        var displays = [CGRect(x: 0, y: 0, width: 1000, height: 800)]
+        let resolver = SpaceDragTargetResolver(displayFramesProvider: { displays }, systemHitTest: { _ in hit },
+                                              applicationHitTest: { _, _ in hit })
+        let target = try XCTUnwrap(resolver.candidates(for: window).first)
+        XCTAssertTrue(resolver.isValid(target, for: window))
+        hit = webArea
+        XCTAssertFalse(resolver.isValid(target, for: window))
+        hit = title
+        displays = []
+        XCTAssertFalse(resolver.isValid(target, for: window))
     }
 
     func testFindsClearBrowserTabStripBelowTabs() {
@@ -2801,6 +3026,13 @@ class SpaceSwitcherTests: XCTestCase {
     }
 
     func testMoveAndItsFollowGestureExcludeDirectSwitchesUntilBothFinish() throws {
+        final class UnavailableActivation: ManagedDisplaySpaceActivating {
+            let isAvailable = false
+            func desktop(number: Int) -> ManagedDisplaySpaceSwitch? { nil }
+            func currentSpace(on displayIdentifier: String) -> UInt64? { nil }
+            func destinationIsVisible(_ target: ManagedDisplaySpaceSwitch) -> Bool? { nil }
+            func activate(_ target: ManagedDisplaySpaceSwitch) -> Bool { false }
+        }
         final class Window: AccessibilityElement {
             override var windowId: CGWindowID? { 101 }
             override var frame: CGRect { CGRect(x: 100, y: 100, width: 500, height: 300) }
@@ -2839,7 +3071,8 @@ class SpaceSwitcherTests: XCTestCase {
             windowSnapshotProvider: { _ in SpaceWindowSnapshot(windowId: 101, pid: 42, frame: window.frame, level: 0, isOnScreen: true) },
             accessibilityAuthorized: { true }, screenProvider: { _ in screen },
             displayIdentifierAtPoint: { _ in "display" }, raiseWindow: { _, _ in raises += 1 }, windowIsFrontmost: { _, _ in true },
-            followMovedWindowProvider: { true }, coordinator: coordinator, physicalInputMonitor: InputMonitorSpy()
+            followMovedWindowProvider: { true }, coordinator: coordinator, physicalInputMonitor: InputMonitorSpy(),
+            adjacentActivation: UnavailableActivation(), gestureTargetIsAdjacent: { _, _ in true }
         )
         XCTAssertTrue(move.execute(parameters: ExecutionParameters(.nextSpace)))
         XCTAssertEqual(poster.phases, [.began])
@@ -9375,6 +9608,60 @@ final class CrossDisplayResizeTests: XCTestCase {
             didFinish?(result, resultingRect)
         }
     }
+}
+
+final class SpaceDisplayReliabilityTests: XCTestCase {
+    private final class Screen: NSScreen {
+        let rect: CGRect
+        init(_ rect: CGRect) { self.rect = rect; super.init() }
+        override var frame: CGRect { rect }
+        override var visibleFrame: CGRect { rect }
+        override var safeAreaInsets: NSEdgeInsets { NSEdgeInsetsZero }
+        override func isEqual(_ object: Any?) -> Bool { (object as AnyObject?) === self }
+        override var hash: Int { ObjectIdentifier(self).hashValue }
+    }
+
+    private func display(current: Any = NSNumber(value: 10), spaces: [[String: Any]]? = nil) -> [String: Any] {
+        ["Display Identifier": "A", "Current Space": ["id64": current],
+         "Spaces": spaces ?? [["id64": 10, "type": 0], ["id64": 20, "type": 0]]]
+    }
+
+    func testMalformedTopologyCannotRedirectNumberedOrAdjacentCommands() {
+        let invalid = [
+            display(current: NSNumber(value: 10.5)), display(current: NSNumber(value: -1)),
+            display(spaces: [["id64": 10, "type": 0], ["type": 0]]),
+            display(spaces: [["id64": 10, "type": 0], ["id64": 10, "type": 0]]),
+            display(spaces: [["id64": 10, "type": 0], ["id64": -20, "type": 0]]),
+            display(spaces: [["id64": 10, "type": 0.5], ["id64": 20, "type": 0]]),
+            display(spaces: [["id64": 10, "type": 0], ["id64": Double.infinity, "type": 0]])
+        ]
+        for raw in invalid {
+            XCTAssertFalse(ManagedSpaceTopology.isValid([raw]))
+            XCTAssertNil(ManagedSpaceTopology.desktop(number: 1, in: [raw]))
+            XCTAssertNil(ManagedSpaceTopology.adjacent(to: [10], direction: .next, on: "A", in: [raw]))
+        }
+        XCTAssertFalse(ManagedSpaceTopology.isValid([display(), display()]))
+    }
+
+    func testDragFallbackRejectsAnInterveningFullScreenSpace() {
+        let raw = [display(spaces: [["id64": 10, "type": 0], ["id64": 15, "type": 4], ["id64": 20, "type": 0]])]
+        XCTAssertEqual(ManagedSpaceTopology.adjacent(to: [10], direction: .next, on: "A", in: raw)?.destinationID, 20)
+        XCTAssertNil(ManagedSpaceTopology.adjacentForGesture(to: [10], direction: .next, on: "A", in: raw))
+        XCTAssertEqual(ManagedSpaceTopology.adjacentForGesture(to: [10], direction: .next, on: "A", in: [display()])?.destinationID, 20)
+    }
+
+    func testInvalidSavedSpaceShortcutUsesSafeDefaults() throws {
+        let name = "Rectangle.SpaceDisplayReliabilityTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(-1, forKey: "nextSpaceSwitchKeyCode")
+        defaults.set(100_000, forKey: "previousSpaceSwitchKeyCode")
+        defaults.set(-1, forKey: "spaceSwitchModifierFlags")
+        XCTAssertEqual(CoreGraphicsSpaceMoveEventPoster.systemShortcut(for: .next, defaults: defaults).0, 124)
+        XCTAssertEqual(CoreGraphicsSpaceMoveEventPoster.systemShortcut(for: .previous, defaults: defaults).0, 123)
+        XCTAssertEqual(CoreGraphicsSpaceMoveEventPoster.systemShortcut(for: .next, defaults: defaults).1, [.maskControl, .maskSecondaryFn])
+    }
+
 }
 
 final class NextPrevDisplayMappingTests: XCTestCase {

@@ -16,7 +16,7 @@ extension ManagedSpaceTopology {
     /// Desktop numbers span displays, but exclude native full-screen Spaces.
     /// Resolve a fresh ID each time: Mission Control can reorder/remove desktops.
     static func desktop(number: Int, in displays: [[String: Any]]) -> ManagedDisplaySpaceSwitch? {
-        guard number > 0 else { return nil }
+        guard number > 0, isValid(displays) else { return nil }
         var ordinal = 0
         for display in displays {
             guard let identifier = display["Display Identifier"] as? String,
@@ -131,6 +131,7 @@ final class SkyLightDisplaySpaceActivation: ManagedDisplaySpaceActivating {
               let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces(),
               let display = displays.first(where: { ($0["Display Identifier"] as? String) == target.displayIdentifier }),
               let spaces = display["Spaces"] as? [[String: Any]],
+              ManagedSpaceTopology.isValid(displays),
               spaces.contains(where: { ($0["id64"] as? NSNumber)?.uint64Value == target.destinationID })
         else { return false }
         if target.sourceID == target.destinationID { return true }

@@ -127,7 +127,7 @@ final class CoreGraphicsSpaceMoveEventPoster: SpaceMoveEventPosting {
             rawValue: UserDefaults.standard.integer(forKey: "spaceSwitchingMethod")
         ) ?? .automatic,
         keyboardShortcutProvider: @escaping (SpaceDirection) -> (CGKeyCode, CGEventFlags) =
-            CoreGraphicsSpaceMoveEventPoster.systemShortcut,
+            { CoreGraphicsSpaceMoveEventPoster.systemShortcut(for: $0) },
         naturalScrollingProvider: @escaping () -> Bool = {
             UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool ?? true
         }
@@ -166,8 +166,7 @@ final class CoreGraphicsSpaceMoveEventPoster: SpaceMoveEventPosting {
         return version.majorVersion == 26 && version.minorVersion < 6
     }
 
-    static func systemShortcut(for direction: SpaceDirection) -> (CGKeyCode, CGEventFlags) {
-        let defaults = UserDefaults.standard
+    static func systemShortcut(for direction: SpaceDirection, defaults: UserDefaults = .standard) -> (CGKeyCode, CGEventFlags) {
         let keyCodeKey = direction == .next ? "nextSpaceSwitchKeyCode" : "previousSpaceSwitchKeyCode"
         let defaultKeyCode = direction == .next ? 124 : 123
         let keyCode = defaults.object(forKey: keyCodeKey) == nil
@@ -177,8 +176,8 @@ final class CoreGraphicsSpaceMoveEventPoster: SpaceMoveEventPosting {
         let flagsKey = "spaceSwitchModifierFlags"
         let rawFlags = defaults.object(forKey: flagsKey) == nil
             ? defaultFlags
-            : UInt64(defaults.integer(forKey: flagsKey))
-        return (CGKeyCode(keyCode), CGEventFlags(rawValue: rawFlags))
+            : UInt64(exactly: defaults.integer(forKey: flagsKey)) ?? defaultFlags
+        return (CGKeyCode(exactly: keyCode) ?? CGKeyCode(defaultKeyCode), CGEventFlags(rawValue: rawFlags))
     }
 
     func prepare(direction: SpaceDirection, at dragPoint: CGPoint, probePoint: CGPoint) -> Bool {
@@ -384,7 +383,7 @@ final class CoreGraphicsSpaceMoveEventPoster: SpaceMoveEventPosting {
         eventNumber: Int64,
         deltaFrom previousPoint: CGPoint? = nil
     ) -> CGEvent? {
-        guard let eventSource,
+        guard point.x.isFinite, point.y.isFinite, let eventSource,
               let event = CGEvent(mouseEventSource: eventSource,
                                   mouseType: type,
                                   mouseCursorPosition: point,
@@ -396,10 +395,12 @@ final class CoreGraphicsSpaceMoveEventPoster: SpaceMoveEventPosting {
         event.setIntegerValueField(.mouseEventNumber, value: eventNumber)
         event.setIntegerValueField(.mouseEventClickState, value: 1)
         if let previousPoint {
+            guard let deltaX = Int64(exactly: (point.x - previousPoint.x).rounded()),
+                  let deltaY = Int64(exactly: (point.y - previousPoint.y).rounded()) else { return nil }
             event.setIntegerValueField(.mouseEventDeltaX,
-                                       value: Int64((point.x - previousPoint.x).rounded()))
+                                       value: deltaX)
             event.setIntegerValueField(.mouseEventDeltaY,
-                                       value: Int64((point.y - previousPoint.y).rounded()))
+                                       value: deltaY)
         }
         tag(event)
         return event
@@ -436,6 +437,7 @@ struct SpaceWindowSnapshot: Equatable {
 typealias SpaceWindowSnapshotProvider = (AccessibilityElement) -> SpaceWindowSnapshot?
 
 final class SpaceManager: SpaceActionExecuting {
+    private static let spaceReader = SkyLightWindowSpaceTransfer()
     private enum State {
         case idle
         case probing
@@ -463,6 +465,12 @@ final class SpaceManager: SpaceActionExecuting {
     private let coordinator: SpaceOperationCoordinator
     private let raiseWindow: (AccessibilityElement) -> Void
     private let windowIsFrontmost: (CGWindowID, String) -> Bool?
+    private let targetSpaceProvider: (CGWindowID, SpaceDirection) -> AdjacentManagedSpace?
+    private let windowSpacesProvider: (CGWindowID) -> [UInt64]?
+    private let currentSpaceProvider: (String) -> UInt64?
+    private let cancelWindowAnimation: (AccessibilityElement) -> Void
+    private var expectedSpace: AdjacentManagedSpace?
+    private var spacePollScheduled = false
     private var operation: SpaceOperationCoordinator.Operation?
 
     var isSpaceActionInProgress: Bool { moveInProgress }
@@ -517,7 +525,16 @@ final class SpaceManager: SpaceActionExecuting {
         releaseTimeout: TimeInterval = 1.5,
         coordinator: SpaceOperationCoordinator = .shared,
         raiseWindow: @escaping (AccessibilityElement) -> Void = { $0.bringToFront(force: true) },
-        windowIsFrontmost: ((CGWindowID, String) -> Bool?)? = nil
+        windowIsFrontmost: ((CGWindowID, String) -> Bool?)? = nil,
+        targetSpaceProvider: @escaping (CGWindowID, SpaceDirection) -> AdjacentManagedSpace? = { windowID, direction in
+            guard let display = SkyLightSpaceNeighborChecker.shared.displayIdentifier(for: windowID),
+                  let spaces = SpaceManager.spaceReader.spaces(for: windowID),
+                  let displays = SkyLightSpaceNeighborChecker.shared.managedDisplaySpaces() else { return nil }
+            return ManagedSpaceTopology.adjacentForGesture(to: spaces, direction: direction, on: display, in: displays)
+        },
+        windowSpacesProvider: @escaping (CGWindowID) -> [UInt64]? = { SpaceManager.spaceReader.spaces(for: $0) },
+        currentSpaceProvider: @escaping (String) -> UInt64? = { SpaceManager.spaceReader.currentSpace(for: $0) },
+        cancelWindowAnimation: @escaping (AccessibilityElement) -> Void = { WindowAnimator.shared.cancel(for: $0) }
     ) {
         self.eventPoster = eventPoster
         self.physicalInputMonitor = physicalInputMonitor
@@ -535,6 +552,10 @@ final class SpaceManager: SpaceActionExecuting {
         self.releaseTimeout = releaseTimeout
         self.coordinator = coordinator
         self.raiseWindow = raiseWindow
+        self.targetSpaceProvider = targetSpaceProvider
+        self.windowSpacesProvider = windowSpacesProvider
+        self.currentSpaceProvider = currentSpaceProvider
+        self.cancelWindowAnimation = cancelWindowAnimation
         self.windowIsFrontmost = windowIsFrontmost ?? { windowID, displayIdentifier in
             SpaceWindowOrder.isFrontmost(windowID: windowID,
                                         in: WindowUtil.getWindowList(forceRefresh: true)) { candidate in
@@ -595,6 +616,7 @@ final class SpaceManager: SpaceActionExecuting {
         }
         let windowElement = requestedElement.topLevelElement ?? requestedElement.windowElement ?? requestedElement
         windowElement.setMessagingTimeout(0.25)
+        cancelWindowAnimation(windowElement)
         Logger.log("Space move target app: \(windowElement.bundleIdentifier ?? "unknown"), role: \(windowElement.role?.rawValue ?? "unknown")")
 
         let initialSnapshot = windowSnapshotProvider(windowElement)
@@ -616,6 +638,13 @@ final class SpaceManager: SpaceActionExecuting {
         }
         if !hasNeighbor {
             Logger.log("Ignoring Space move at the end of this display's normal Spaces")
+            return true
+        }
+        guard let target = targetSpaceProvider(windowID, direction), target.displayIdentifier == sourceDisplayIdentifier,
+              target.sourceID != target.destinationID,
+              windowSpacesProvider(windowID) == [target.sourceID],
+              currentSpaceProvider(sourceDisplayIdentifier) == target.sourceID else {
+            Logger.log("Ignoring drag move: unable to verify an adjacent normal desktop for the gesture")
             return true
         }
 
@@ -647,6 +676,8 @@ final class SpaceManager: SpaceActionExecuting {
         trackedWindowId = windowID
         self.direction = direction
         self.sourceDisplayIdentifier = sourceDisplayIdentifier
+        expectedSpace = target
+        spacePollScheduled = false
         self.candidates = candidates
         candidateIndex = 0
         currentCandidate = nil
@@ -688,11 +719,11 @@ final class SpaceManager: SpaceActionExecuting {
             Logger.log("Space move window does not expose settable AXPosition; relying on drag acquisition")
         }
         let frame = windowElement.frame
-        guard !frame.isNull, frame.width >= 20, frame.height >= 10 else {
+        guard frame.isFiniteAndNonEmpty, frame.width >= 20, frame.height >= 10 else {
             fail("Unable to determine a movable window frame")
             return false
         }
-        if let snapshot, snapshot.level != 0 {
+        guard let snapshot, snapshot.level == 0, snapshot.isOnScreen, snapshot.frame.isFiniteAndNonEmpty else {
             fail("This window style cannot be moved between Spaces")
             return false
         }
@@ -795,7 +826,7 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func observeProbe(executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled, let window = targetWindow else {
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue, let window = targetWindow else {
             finish(executionID: executionID, restoreCursor: false, succeeded: false)
             return
         }
@@ -824,7 +855,7 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func confirmProbeRestored(executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled, let window = targetWindow else {
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue, let window = targetWindow else {
             finish(executionID: executionID, restoreCursor: false, succeeded: false)
             return
         }
@@ -883,12 +914,18 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func dragAcquired(executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled else {
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue else {
             finish(executionID: executionID, restoreCursor: false, succeeded: false)
             return
         }
         guard let trackedWindowId,
               let sourceDisplayIdentifier,
+              let expectedSpace, let targetWindow,
+              targetWindow.windowId == trackedWindowId,
+              targetWindow.isMinimized != true, targetWindow.isFullScreen != true,
+              targetWindow.isSheet != true, targetWindow.isModal != true,
+              currentSpaceProvider(sourceDisplayIdentifier) == expectedSpace.sourceID,
+              windowSpacesProvider(trackedWindowId) == [expectedSpace.sourceID],
               windowDisplayIdentifier(trackedWindowId) == sourceDisplayIdentifier
         else {
             Logger.log("Cancelling Space move after the window changed displays during drag acquisition")
@@ -922,9 +959,7 @@ final class SpaceManager: SpaceActionExecuting {
         guard SpaceGesturePhase.allCases.indices.contains(nextIndex) else {
             gestureEnded = true
             state = .awaitingSpaceChange
-            if spaceChangeObserved {
-                beginWindowConfirmation(executionID: executionID)
-            }
+            checkSpaceArrival(executionID: executionID)
             return
         }
         let delay = eventPoster.gesturePhaseDelay
@@ -946,9 +981,38 @@ final class SpaceManager: SpaceActionExecuting {
             guard let self, self.isActive(executionID), self.gestureStarted else { return }
             self.spaceChangeObserved = true
             if self.gestureEnded {
-                self.beginWindowConfirmation(executionID: executionID)
+                self.checkSpaceArrival(executionID: executionID)
             }
         }
+    }
+
+    private func checkSpaceArrival(executionID: UInt64) {
+        guard isActive(executionID), state == .awaitingSpaceChange, let expectedSpace, let trackedWindowId else { return }
+        guard coordinator.canContinue, cursorStillControlled else {
+            finish(executionID: executionID, restoreCursor: false, succeeded: false); return
+        }
+        let current = currentSpaceProvider(expectedSpace.displayIdentifier)
+        let memberships = windowSpacesProvider(trackedWindowId)
+        if let current, current != expectedSpace.sourceID, current != expectedSpace.destinationID {
+            finish(executionID: executionID, restoreCursor: false, succeeded: false); return
+        }
+        if current == expectedSpace.destinationID, memberships == [expectedSpace.destinationID] {
+            beginWindowConfirmation(executionID: executionID)
+            return
+        }
+        guard !spacePollScheduled else { return }
+        spacePollScheduled = true
+        scheduler(windowStabilityPollDelay) { [weak self] in
+            guard let self, self.isActive(executionID) else { return }
+            self.spacePollScheduled = false
+            self.checkSpaceArrival(executionID: executionID)
+        }
+    }
+
+    private var destinationStillOwned: Bool {
+        guard let expectedSpace, let trackedWindowId else { return false }
+        return currentSpaceProvider(expectedSpace.displayIdentifier) == expectedSpace.destinationID
+            && windowSpacesProvider(trackedWindowId) == [expectedSpace.destinationID]
     }
 
     private func beginWindowConfirmation(executionID: UInt64) {
@@ -962,13 +1026,15 @@ final class SpaceManager: SpaceActionExecuting {
     }
 
     private func confirmWindowStable(executionID: UInt64) {
-        guard isActive(executionID), cursorStillControlled, coordinator.canContinue, let targetWindow else {
+        guard isActive(executionID), cursorStillControlled, coordinator.canContinue, destinationStillOwned, let targetWindow else {
             finish(executionID: executionID, restoreCursor: false, succeeded: false)
             return
         }
         guard let trackedWindowId,
               let snapshot = windowSnapshotProvider(targetWindow),
               snapshot.isOnScreen,
+              snapshot.level == 0,
+              snapshot.frame.isFiniteAndNonEmpty,
               snapshot.windowId == trackedWindowId
         else {
             stableFrameCount = 0
@@ -1003,7 +1069,7 @@ final class SpaceManager: SpaceActionExecuting {
 
     private func confirmWindowOrder(poll: Int, stablePolls: Int, executionID: UInt64) {
         guard isActive(executionID) else { return }
-        guard cursorStillControlled, coordinator.canContinue,
+        guard cursorStillControlled, coordinator.canContinue, destinationStillOwned,
               let targetWindow, let trackedWindowId, let sourceDisplayIdentifier,
               targetWindow.windowId == trackedWindowId,
               targetWindow.isMinimized != true, targetWindow.isFullScreen != true,
@@ -1078,6 +1144,8 @@ final class SpaceManager: SpaceActionExecuting {
         trackedWindowId = nil
         direction = nil
         sourceDisplayIdentifier = nil
+        expectedSpace = nil
+        spacePollScheduled = false
         candidates.removeAll(keepingCapacity: true)
         candidateIndex = 0
         currentCandidate = nil

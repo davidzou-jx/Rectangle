@@ -110,7 +110,7 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
         let windowFrame = window.frame
         let rawTitleBar = validFrame(window.titleBarFrame)
         guard let pid = window.pid,
-              !windowFrame.isNull,
+              windowFrame.isFiniteAndNonEmpty,
               windowFrame.width >= 20,
               windowFrame.height >= 10,
               let displayClip = displayClip(for: windowFrame, preferredFrame: rawTitleBar)
@@ -177,7 +177,7 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
                 reject("outside window or display")
                 continue
             }
-            let identity = "\(Int(seed.point.x.rounded())):\(Int(seed.point.y.rounded()))"
+            let identity = "\(seed.point.x.rounded()):\(seed.point.y.rounded())"
             guard seen.insert(identity).inserted else { continue }
             guard !obstacles.contains(where: { $0.frame.insetBy(dx: -3, dy: -3).contains(seed.point) }) else {
                 reject("covered by AX control")
@@ -222,7 +222,10 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
 
     func isValid(_ target: SpaceDragTarget, for windowElement: AccessibilityElement) -> Bool {
         let window = windowElement.windowElement ?? windowElement
-        guard let pid = window.pid else { return false }
+        guard let pid = window.pid, window.frame.isFiniteAndNonEmpty,
+              window.frame.contains(target.point),
+              window.isSheet != true, window.isModal != true, window.isMinimized != true, window.isFullScreen != true,
+              displayFramesProvider().contains(where: { $0.isFiniteAndNonEmpty && $0.contains(target.point) }) else { return false }
         return validate(point: target.point,
                         targetWindow: window,
                         targetPid: pid,
@@ -234,7 +237,7 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
     func recordSuccess(_ target: SpaceDragTarget, for windowElement: AccessibilityElement) {
         let window = windowElement.windowElement ?? windowElement
         let frame = window.frame
-        guard !frame.isNull, frame.width > 0, frame.height > 0, frame.contains(target.point) else {
+        guard frame.isFiniteAndNonEmpty, frame.contains(target.point) else {
             return
         }
         let titleBar = validFrame(window.titleBarFrame)
@@ -375,11 +378,11 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
             onReject?("application window mismatch \(applicationHit.role?.rawValue ?? "unknown")")
             return nil
         }
-        guard !isActionable(systemHit) else {
+        guard !isActionable(systemHit), safetyScore(for: systemHit.role) >= 0 else {
             onReject?("system actionable \(systemHit.role?.rawValue ?? "unknown")")
             return nil
         }
-        guard !isActionable(applicationHit) else {
+        guard !isActionable(applicationHit), safetyScore(for: applicationHit.role) >= 0 else {
             onReject?("application actionable \(applicationHit.role?.rawValue ?? "unknown")")
             return nil
         }
@@ -434,8 +437,8 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
             bundleIdentifier: window.bundleIdentifier ?? "pid:\(window.pid ?? 0)",
             role: window.role?.rawValue ?? "",
             subrole: window.subrole?.rawValue ?? "",
-            titleBarHeight: Int((titleBar?.height ?? 0).rounded()),
-            toolbarHeight: Int((toolbar?.height ?? 0).rounded())
+            titleBarHeight: Int(exactly: (titleBar?.height ?? 0).rounded()) ?? 0,
+            toolbarHeight: Int(exactly: (toolbar?.height ?? 0).rounded()) ?? 0
         )
     }
 
@@ -446,7 +449,7 @@ final class SpaceDragTargetResolver: SpaceDragTargetResolving {
     }
 
     private func validFrame(_ frame: CGRect?) -> CGRect? {
-        guard let frame, !frame.isNull, frame.width > 0, frame.height > 0 else { return nil }
+        guard let frame, frame.isFiniteAndNonEmpty else { return nil }
         return frame
     }
 

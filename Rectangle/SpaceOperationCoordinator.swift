@@ -7,6 +7,7 @@ final class SpaceOperationCoordinator {
 
     final class Operation {
         fileprivate init() {}
+        fileprivate var cancelled = false
     }
 
     private weak var activeOperation: Operation?
@@ -18,11 +19,15 @@ final class SpaceOperationCoordinator {
     private var spaceObserver: NSObjectProtocol?
     private var verifiedSwitchState: [String: UInt64]?
     private var verifiedSwitchTime: TimeInterval?
+    private var lifecycleObservers = [(NotificationCenter, NSObjectProtocol)]()
+    private var sessionActive = true
+    private var awake = true
 
     init(environmentIsSafe: @escaping () -> Bool = { !WindowAnimationInterruptionPolicy.missionControlActive },
          clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
-         quietPeriod: TimeInterval = 0.15) {
+         quietPeriod: TimeInterval = 0.15,
+         notificationCenter: NotificationCenter = .default) {
         self.environmentIsSafe = environmentIsSafe
         self.clock = clock
         self.workspaceNotificationCenter = workspaceNotificationCenter
@@ -33,14 +38,36 @@ final class SpaceOperationCoordinator {
             guard let self else { return }
             self.lastSpaceChange = self.clock()
         }
+        for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification, NSWorkspace.didWakeNotification] {
+            let observer = workspaceNotificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if name == NSWorkspace.sessionDidResignActiveNotification { self.sessionActive = false }
+                if name == NSWorkspace.sessionDidBecomeActiveNotification { self.sessionActive = true }
+                if name == NSWorkspace.willSleepNotification { self.awake = false }
+                if name == NSWorkspace.didWakeNotification { self.awake = true }
+                self.interrupt()
+            }
+            lifecycleObservers.append((workspaceNotificationCenter, observer))
+        }
+        let screenObserver = notificationCenter.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.interrupt() }
+        lifecycleObservers.append((notificationCenter, screenObserver))
     }
 
     var isOperationInProgress: Bool { activeOperation != nil }
-    var canContinue: Bool { environmentIsSafe() }
+    var canContinue: Bool { sessionActive && awake && activeOperation?.cancelled != true && environmentIsSafe() }
+
+    private func interrupt() {
+        activeOperation?.cancelled = true
+        lastSpaceChange = clock()
+        invalidateVerifiedSwitch()
+    }
 
     func begin(continuing operation: Operation? = nil) -> Operation? {
         guard canContinue else {
-            Logger.log("Ignoring Space action while Mission Control is active")
+            Logger.log("Ignoring Space action while the session or window environment is unavailable")
             return nil
         }
         if let operation {
@@ -89,5 +116,6 @@ final class SpaceOperationCoordinator {
 
     deinit {
         if let spaceObserver { workspaceNotificationCenter.removeObserver(spaceObserver) }
+        for (center, observer) in lifecycleObservers { center.removeObserver(observer) }
     }
 }

@@ -327,6 +327,7 @@ final class SpaceSwitchManager: SpaceActionExecuting {
     }
 
     private static func parse(_ raw: [[String: Any]]) -> [Display]? {
+        guard ManagedSpaceTopology.isValid(raw) else { return nil }
         var displays = [Display]()
         var identifiers = Set<String>()
         for entry in raw {

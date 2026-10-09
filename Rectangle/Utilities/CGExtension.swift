@@ -4,16 +4,28 @@ import Foundation
 
 extension CGPoint {
     var screenFlipped: CGPoint {
-        .init(x: x, y: NSScreen.screens[0].frame.maxY - y)
+        screenFlipped(primaryScreenMaxY: NSScreen.screens.first?.frame.maxY)
+    }
+
+    func screenFlipped(primaryScreenMaxY: CGFloat?) -> CGPoint {
+        guard let primaryScreenMaxY else { return self }
+        return .init(x: x, y: primaryScreenMaxY - y)
     }
 }
 
 extension CGRect {
     var screenFlipped: CGRect {
-        guard !isNull else {
-            return self
-        }
-        return .init(origin: .init(x: origin.x, y: NSScreen.screens[0].frame.maxY - maxY), size: size)
+        screenFlipped(primaryScreenMaxY: NSScreen.screens.first?.frame.maxY)
+    }
+
+    func screenFlipped(primaryScreenMaxY: CGFloat?) -> CGRect {
+        guard !isNull, let primaryScreenMaxY else { return self }
+        return .init(origin: .init(x: origin.x, y: primaryScreenMaxY - maxY), size: size)
+    }
+
+    var isFiniteAndNonEmpty: Bool {
+        !isNull && origin.x.isFinite && origin.y.isFinite && size.width.isFinite && size.height.isFinite
+            && size.width > 0 && size.height > 0 && maxX.isFinite && maxY.isFinite
     }
 
     var isLandscape: Bool { width > height }
