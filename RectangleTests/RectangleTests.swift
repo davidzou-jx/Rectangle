@@ -3398,6 +3398,7 @@ class BandTilingTests: XCTestCase {
         let reportedMinimumSize: CGSize?
         let canResize: Bool
         let ordinaryWindow: Bool
+        var reportedFrameAfterWrite: CGRect?
 
         init(frame: CGRect = .zero, minimumHeight: CGFloat = 0, maximumWidth: CGFloat = .greatestFiniteMagnitude,
              minimumHeightAtOrigin: @escaping (CGFloat) -> CGFloat = { _ in 0 },
@@ -3416,7 +3417,7 @@ class BandTilingTests: XCTestCase {
                                      : AXUIElementCreateApplication(pid_t(10_000 + identity)))
         }
 
-        override var frame: CGRect { acceptedFrame }
+        override var frame: CGRect { setFrameCalls > 0 ? reportedFrameAfterWrite ?? acceptedFrame : acceptedFrame }
         override var windowId: CGWindowID? { testWindowId }
         override var pid: pid_t? { 42 }
         override var minimumSize: CGSize? { reportedMinimumSize }
@@ -3564,6 +3565,34 @@ class BandTilingTests: XCTestCase {
             XCTAssertGreaterThan(currentSpace.setFrameCalls, 0)
             XCTAssertEqual(otherSpace.setFrameCalls, 0)
         }
+    }
+
+    func testSharedMultiWindowSelectionExcludesOtherSpacesBeforeAnyLayout() {
+        let screen = TestScreen(frame: CGRect(x: 0, y: 0, width: 900, height: 600))
+        let frame = screen.frame.insetBy(dx: 100, dy: 100).screenFlipped
+        let focused = TestElement(frame: frame, windowId: 101, identity: 1)
+        let covered = TestElement(frame: frame, windowId: 102, identity: 2)
+        let otherSpace = TestElement(frame: frame, windowId: 999, identity: 3)
+        let invalid = TestElement(frame: .null, windowId: 103, identity: 4)
+        let selected = Manager.windowsOnScreen(screens: UsableScreens(currentScreen: screen, numScreens: 1),
+            windows: [covered, otherSpace, invalid], focusedWindow: focused,
+            visibleWindowInfo: [visible(102, frame: frame), visible(103, frame: .null)],
+            isActiveTodoWindow: { _ in false }, screenFor: { _ in screen }).windows
+        XCTAssertEqual(selected.map(\.windowId), [102, 101])
+        Manager.tileAllWindowsOnScreen(windows: selected, screen: screen)
+        XCTAssertGreaterThan(covered.setFrameCalls, 0)
+        XCTAssertGreaterThan(focused.setFrameCalls, 0)
+        XCTAssertEqual(otherSpace.setFrameCalls, 0)
+        XCTAssertEqual(invalid.setFrameCalls, 0)
+    }
+
+    func testBandTilingHandlesAnInvalidAXFrameAfterPlacement() {
+        let screen = TestScreen(frame: CGRect(x: 0, y: 0, width: 900, height: 600))
+        let window = TestElement(frame: screen.frame.insetBy(dx: 100, dy: 100).screenFlipped, windowId: 101, identity: 1)
+        window.reportedFrameAfterWrite = CGRect(x: CGFloat.nan, y: 100, width: 300, height: 200)
+        Manager.tileWindowsInBands(.rows, focusedWindow: nil, windows: [window],
+                                  visibleWindowInfo: [visible(101, frame: window.frame)], screen: screen, visibleFrame: screen.frame)
+        XCTAssertEqual(window.setFrameCalls, 1)
     }
 
     func testEmptyPointerDisplayDoesNotMoveWindowsOnAnotherDisplay() throws {
@@ -7918,6 +7947,35 @@ final class DragRestoreReleaseTests: XCTestCase {
 }
 
 class SnappingManagerSessionTests: XCTestCase {
+
+    func testSpaceDisplayAndSessionChangesClearThePreviousDragTarget() throws {
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSApplication.didChangeScreenParametersNotification,
+                     NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            let manager = SnappingManager()
+            manager.beginNativeDrag()
+            manager.windowElement = AccessibilityElement(AXUIElementCreateSystemWide())
+            manager.windowId = 42
+            manager.initialWindowRect = CGRect(x: 100, y: 100, width: 300, height: 200)
+            manager.windowMoving = true
+            manager.windowIdAttempt = 4
+            manager.currentSnapArea = SnapArea(screen: screen, directional: .l, action: .leftHalf)
+            if name == NSApplication.didChangeScreenParametersNotification {
+                NotificationCenter.default.post(name: name, object: nil)
+            } else {
+                // Exercise the handler without changing other managers' live
+                // shared session state in this app-hosted test process.
+                if name == NSWorkspace.activeSpaceDidChangeNotification { manager.receiveWorkspaceNote(Notification(name: name)) }
+                else { manager.receiveSessionNote(Notification(name: name)) }
+            }
+            XCTAssertNil(manager.currentSnapArea)
+            XCTAssertNil(manager.windowElement)
+            XCTAssertNil(manager.windowId)
+            XCTAssertNil(manager.initialWindowRect)
+            XCTAssertFalse(manager.windowMoving)
+            XCTAssertEqual(manager.windowIdAttempt, 0)
+        }
+    }
 
     private var savedSnappingEnabled: Bool?
 

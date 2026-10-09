@@ -58,8 +58,9 @@ class MultiWindowManager {
             return nil
         }
 
-        return windowsOnScreen(screens: screens, windows: AccessibilityElement.getAllWindowElements(),
-                               sortByPID: sortByPID,
+        let visibleInfo = WindowUtil.getWindowList(forceRefresh: true)
+        return windowsOnScreen(screens: screens, windows: AccessibilityElement.getAllWindowElements(from: visibleInfo),
+                               focusedWindow: windowElement, sortByPID: sortByPID, visibleWindowInfo: visibleInfo,
                                screenFor: { screenDetection.detectScreens(using: $0)?.currentScreen })
     }
 
@@ -70,6 +71,7 @@ class MultiWindowManager {
     static func windowsOnScreen(screens: UsableScreens, windows: [AccessibilityElement],
                                 focusedWindow: AccessibilityElement? = nil,
                                 sortByPID: Bool = false, combineScreens: Bool = false,
+                                visibleWindowInfo: [WindowInfo]? = nil,
                                 isActiveTodoWindow: (AccessibilityElement) -> Bool = MultiWindowManager.isActiveTodoWindow,
                                 screenFor: (AccessibilityElement) -> NSScreen?) -> (screens: UsableScreens, windows: [AccessibilityElement]) {
         var windows = windows
@@ -90,12 +92,23 @@ class MultiWindowManager {
             if combineScreens || screenFor(w) == screens.currentScreen,
                w.isWindow == true,
                w.isSheet != true,
+               w.isModal != true,
+               w.isFullScreen != true,
                w.isMinimized != true,
                w.isHidden != true,
-               w.isSystemDialog != true
+               w.isSystemDialog != true,
+               w.frame.isFiniteAndNonEmpty
             {
                 actualWindows.append(w)
             }
+        }
+
+        if let visibleWindowInfo {
+            let snapshots = actualWindows.map {
+                TilingWindow(element: $0, frame: $0.frame, windowId: $0.windowId,
+                             pid: $0.pid, isFocused: $0 == focusedWindow)
+            }
+            actualWindows = selectCurrentSpaceWindows(snapshots, visibleWindowInfo: visibleWindowInfo).map(\.element)
         }
 
         return (screens, actualWindows)
@@ -107,10 +120,12 @@ class MultiWindowManager {
         if let focusedWindow,
               focusedWindow.isWindow == true,
               focusedWindow.isSheet != true,
+              focusedWindow.isModal != true,
+              focusedWindow.isFullScreen != true,
               focusedWindow.isMinimized != true,
               focusedWindow.isHidden != true,
               focusedWindow.isSystemDialog != true,
-              !focusedWindow.frame.isNull {
+              focusedWindow.frame.isFiniteAndNonEmpty {
             eligibleFocus = focusedWindow
         } else {
             eligibleFocus = nil
@@ -148,11 +163,12 @@ class MultiWindowManager {
     static func tileWindowsInBands(_ direction: BandDirection, focusedWindow: AccessibilityElement?,
                                     windows: [AccessibilityElement], visibleWindowInfo: [WindowInfo],
                                     screen: NSScreen, visibleFrame: CGRect) {
+        guard visibleFrame.isFiniteAndNonEmpty, screen.frame.isFiniteAndNonEmpty else { return }
         guard focusedWindow?.frame.screenFlipped.intersects(screen.frame) != false else { return }
 
         let snapshots = windows.compactMap { window -> TilingWindow? in
             let frame = window.frame
-            guard !frame.isNull else { return nil }
+            guard frame.isFiniteAndNonEmpty else { return nil }
             return TilingWindow(element: window,
                                 frame: frame,
                                 windowId: window.windowId,
@@ -173,7 +189,8 @@ class MultiWindowManager {
             let size = isResizable ? (candidate.element.minimumSize ?? .zero) : candidate.frame.size
             let backingSize = screen.convertRectToBacking(CGRect(origin: .zero, size: size)).size
             func constraint(_ size: CGFloat, maximum: Int) -> GridTiling.Constraint {
-                let pixels = max(0, Int(isResizable ? ceil(size) : size.rounded()))
+                let rounded = isResizable ? ceil(size) : size.rounded()
+                let pixels = max(0, Int(exactly: rounded) ?? (size > 0 ? maximum : 0))
                 return isResizable ? .resizable(minimum: pixels, maximum: maximum) : .fixed(pixels)
             }
             return GridTiling.WindowConstraints(width: constraint(backingSize.width, maximum: bounds.extent(.columns)),
@@ -188,7 +205,7 @@ class MultiWindowManager {
             let window = ordered[index].element
             window.setFrame(screen.convertRectFromBacking(frame).screenFlipped)
             let achieved = window.frame
-            return achieved.isNull ? .null : BackingPixelBounds(screen.convertRectToBacking(achieved.screenFlipped)).rect
+            return achieved.isFiniteAndNonEmpty ? BackingPixelBounds(screen.convertRectToBacking(achieved.screenFlipped)).rect : .null
         }
     }
 
@@ -307,9 +324,10 @@ class MultiWindowManager {
         let screenDetection = ScreenDetection()
         guard let context = tilingContext(focusedWindow: AccessibilityElement.getFocusedWindowElement(),
                                           screenDetection: screenDetection) else { return }
+        let visibleInfo = WindowUtil.getWindowList(forceRefresh: true)
         let windows = windowsOnScreen(screens: context.screens,
-                                      windows: AccessibilityElement.getAllWindowElements(),
-                                      sortByPID: true,
+                                      windows: AccessibilityElement.getAllWindowElements(from: visibleInfo),
+                                      focusedWindow: context.focusedWindow, sortByPID: true, visibleWindowInfo: visibleInfo,
                                       screenFor: { screenDetection.detectScreens(using: $0)?.currentScreen }).windows
         tileAllWindowsOnScreen(windows: windows, screen: context.screens.currentScreen)
     }
@@ -318,6 +336,7 @@ class MultiWindowManager {
         guard !windows.isEmpty else { return }
 
         let screenFrame = screen.adjustedVisibleFrame().screenFlipped
+        guard screenFrame.isFiniteAndNonEmpty else { return }
         let count = windows.count
 
         let columns = Int(ceil(sqrt(CGFloat(count))))
@@ -393,7 +412,7 @@ class MultiWindowManager {
             // move the first to become the last (top)
             filtered.append(filtered.removeFirst())
             // set up parameters
-            cascadeParameters = CascadeActiveAppParameters(windowFrame: first.frame, screenFrame: screenFrame, numWindows: filtered.count, size: first.size!, delta: delta)
+            cascadeParameters = CascadeActiveAppParameters(windowFrame: first.frame, screenFrame: screenFrame, numWindows: filtered.count, size: first.frame.size, delta: delta)
         }
 
         // cascade the filtered windows
@@ -427,6 +446,7 @@ class MultiWindowManager {
             }
         }
 
+        guard rect.isFiniteAndNonEmpty else { return }
         w.setFrame(rect)
         w.bringToFront()
     }
@@ -442,6 +462,7 @@ class MultiWindowManager {
 
         // keep windows with a pid equal to the front window's pid
         let filtered = windows.filter { $0.pid == frontWindowElement.pid }
+        guard !filtered.isEmpty, screenFrame.isFiniteAndNonEmpty else { return }
 
         let count = filtered.count
 

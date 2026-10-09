@@ -385,7 +385,8 @@ final class WindowAnimator {
             }
         }
         let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.willSleepNotification] {
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.willSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.direct.cancel()
             }

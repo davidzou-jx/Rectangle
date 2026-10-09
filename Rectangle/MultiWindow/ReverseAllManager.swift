@@ -9,18 +9,19 @@ class ReverseAllManager {
         let sd = ScreenDetection()
 
         let currentWindow = windowElement ?? AccessibilityElement.getFrontWindowElement()
-        guard let currentScreen = sd.detectScreens(using: currentWindow)?.currentScreen else { return }
-
-        let windows = AccessibilityElement.getAllWindowElements()
+        guard let screens = sd.detectScreens(using: currentWindow) else { return }
+        let currentScreen = screens.currentScreen
+        let visibleInfo = WindowUtil.getWindowList(forceRefresh: true)
+        let windows = MultiWindowManager.windowsOnScreen(
+            screens: screens, windows: AccessibilityElement.getAllWindowElements(from: visibleInfo),
+            focusedWindow: currentWindow, visibleWindowInfo: visibleInfo,
+            screenFor: { sd.detectScreens(using: $0)?.currentScreen }).windows
 
         let screenFrame = currentScreen.adjustedVisibleFrame()
+        guard screenFrame.isFiniteAndNonEmpty else { return }
 
         for w in windows {
-            let wScreen = sd.detectScreens(using: w)?.currentScreen
-            if Defaults.todo.userEnabled && TodoManager.isTodoWindow(w) { continue }
-            if wScreen == currentScreen {
-                reverseWindowPosition(w, screenFrame: screenFrame)
-            }
+            reverseWindowPosition(w, screenFrame: screenFrame)
         }
     }
 

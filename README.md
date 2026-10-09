@@ -83,6 +83,8 @@ For **Next Space** and **Previous Space**, if the bridged operation is unavailab
 
 Sheets, modal windows, minimized windows, and native full-screen/Split View windows are left alone. The drag fallback also requires a safe draggable area. Its Space-switching backend and key codes can be changed with the [hidden preferences](TerminalCommands.md#change-how-move-to-space-switches-spaces).
 
+Display moves keep oversized windows within the destination's usable area when the app permits resizing. **Restore** keeps a saved window reachable on the current display if its original display is no longer connected. Tiling, cascade, and reverse-all commands select windows in the visible Space, including covered windows, without moving that app's windows on other Spaces.
+
 ### Ignore an app
 
 Ignoring an app means that when the app is frontmost, keyboard shortcuts are un-registered from macOS. When the app is no longer frontmost, keyboard shortcuts are re-registered with macOS. This is useful for apps that have the same shortcuts like Rectangle and you do not want to change them.

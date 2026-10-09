@@ -181,6 +181,7 @@ class SnappingManager {
     
     private func registerWorkspaceChangeNote() {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(receiveWorkspaceNote(_:)), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(receiveDisplayNote(_:)), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         checkFullScreen()
     }
     
@@ -190,14 +191,25 @@ class SnappingManager {
     }
     
     @objc func receiveWorkspaceNote(_ notification: Notification) {
+        interruptNativeDrag()
         checkFullScreen()
+    }
+
+    @objc func receiveDisplayNote(_ notification: Notification) {
+        interruptNativeDrag()
     }
     
     private func registerSessionChangeNote() {
-        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(receiveSessionNote(_:)), name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        for name in [NSWorkspace.sessionDidBecomeActiveNotification, NSWorkspace.sessionDidResignActiveNotification,
+                     NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(receiveSessionNote(_:)), name: name, object: nil)
+        }
     }
     
     @objc func receiveSessionNote(_ notification: Notification) {
+        interruptNativeDrag()
+        if notification.name == NSWorkspace.willSleepNotification
+            || notification.name == NSWorkspace.sessionDidResignActiveNotification { return }
         checkFullScreen()
     }
         
@@ -573,6 +585,17 @@ class SnappingManager {
         initialEventWindowID = nil
         windowIdAttempt = 0
         lastWindowIdAttempt = nil
+    }
+
+    private func interruptNativeDrag() {
+        pendingReleasedRestore = nil
+        nativeGesture.cancel()
+        nativeGesture.end()
+        resetNativeDragState()
+        // Transition cleanup is immediate; a fading preview can otherwise
+        // stay attached to its old display or Space during reconfiguration.
+        box?.close()
+        box = nil
     }
     
     private func isRestoreSuppressedBySizeChange(windowId: CGWindowID) -> Bool {
