@@ -87,10 +87,14 @@ class DisplayFocusManagerTests: XCTestCase {
         }
 
         override var frame: NSRect { testFrame }
+        override func isEqual(_ object: Any?) -> Bool { (object as? TestScreen) === self }
     }
 
     private final class TestWindow: AccessibilityElement {
         private let testFrame: CGRect
+        var testID: CGWindowID = 42
+        var testPID: pid_t = 99
+        var modal = false
 
         init(frame: CGRect) {
             testFrame = frame
@@ -98,6 +102,10 @@ class DisplayFocusManagerTests: XCTestCase {
         }
 
         override var frame: CGRect { testFrame }
+        override var windowId: CGWindowID? { testID }
+        override var pid: pid_t? { testPID }
+        override var isWindow: Bool? { true }
+        override var isModal: Bool? { modal }
     }
 
     private final class TestScreenDetection: ScreenDetection {
@@ -129,7 +137,9 @@ class DisplayFocusManagerTests: XCTestCase {
                 let window = TestWindow(frame: frame.screenFlipped)
                 var cursorPositions: [CGPoint] = []
                 let manager = DisplayFocusManager(screenDetection: detection, frontWindowProvider: { window },
-                                                  warpCursor: { cursorPositions.append($0); return .failure })
+                                                  warpCursor: { cursorPositions.append($0); return .failure },
+                                                  coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                                                  mousePressed: { false })
                 manager.focusNextDisplay()
                 XCTAssertEqual(cursorPositions, [destination.frame.screenFlipped.centerPoint])
             }
@@ -141,10 +151,85 @@ class DisplayFocusManagerTests: XCTestCase {
         let detection = TestScreenDetection()
         var cursorPositions: [CGPoint] = []
         let manager = DisplayFocusManager(screenDetection: detection, frontWindowProvider: { nil },
-                                          warpCursor: { cursorPositions.append($0); return .failure })
+                                          warpCursor: { cursorPositions.append($0); return .failure },
+                                                  coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                                                  mousePressed: { false })
         manager.focusNextDisplay()
         XCTAssertTrue(cursorPositions.isEmpty)
         XCTAssertEqual(detection.cursorDetections, 0)
+    }
+
+    func testFocusRejectsDraggingMissionControlAndAnOwnedSpaceOperation() throws {
+        for scenario in 0..<3 {
+            let coordinator = SpaceOperationCoordinator(environmentIsSafe: { scenario != 0 }, workspaceNotificationCenter: NotificationCenter())
+            let lease = scenario == 2 ? try XCTUnwrap(coordinator.begin()) : nil
+            var warps = 0
+            let manager = DisplayFocusManager(frontWindowProvider: { TestWindow(frame: CGRect(x: 100, y: 100, width: 200, height: 200)) },
+                                              warpCursor: { _ in warps += 1; return .success }, coordinator: coordinator,
+                                              mousePressed: { scenario == 1 })
+            manager.focusNextDisplay()
+            XCTAssertEqual(warps, 0)
+            withExtendedLifetime(lease) {}
+        }
+    }
+
+    func testFocusSkipsModalWindowsAndRevalidatesCandidateAfterAXLookup() {
+        for vanished in [false, true] {
+            let left = TestScreen(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+            let right = TestScreen(frame: CGRect(x: 600, y: 0, width: 600, height: 400))
+            let source = TestWindow(frame: left.frame.insetBy(dx: 50, dy: 50).screenFlipped)
+            let modal = TestWindow(frame: right.frame.insetBy(dx: 50, dy: 50).screenFlipped)
+            modal.testID = 1; modal.testPID = 10; modal.modal = true
+            let candidate = TestWindow(frame: modal.frame)
+            candidate.testID = 2; candidate.testPID = 20
+            var windows = [WindowInfo(id: 1, level: 0, frame: modal.frame, pid: 10, processName: "Modal"),
+                           WindowInfo(id: 2, level: 0, frame: candidate.frame, pid: 20, processName: "Ordinary")]
+            var activated = [CGWindowID]()
+            let manager = DisplayFocusManager(
+                screenDetection: ScreenDetection(screens: { [left, right] }, logicalFrame: { _ in nil }), frontWindowProvider: { source },
+                warpCursor: { _ in .success },
+                coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                mousePressed: { false }, windowListProvider: { windows }, windowProvider: { info in
+                    if info.id == 1 { return modal }
+                    if vanished { windows.removeAll() }
+                    return candidate
+                }, activateWindow: { activated.append($0.windowId!) })
+            manager.focusNextDisplay()
+            XCTAssertEqual(activated, vanished ? [] : [2])
+        }
+    }
+
+    func testFocusDoesNotActivateAfterDestinationDisplayDisconnects() {
+        let left = TestScreen(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let right = TestScreen(frame: CGRect(x: 600, y: 0, width: 600, height: 400))
+        var screens: [NSScreen] = [left, right]
+        let source = TestWindow(frame: left.frame.insetBy(dx: 50, dy: 50).screenFlipped)
+        let candidate = TestWindow(frame: right.frame.insetBy(dx: 50, dy: 50).screenFlipped)
+        var activated = false
+        let manager = DisplayFocusManager(screenDetection: ScreenDetection(screens: { screens }, logicalFrame: { _ in nil }),
+            frontWindowProvider: { source }, warpCursor: { _ in screens = [left]; return .success },
+            coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+            mousePressed: { false },
+            windowListProvider: { [WindowInfo(id: 42, level: 0, frame: candidate.frame, pid: 99, processName: "App")] },
+            windowProvider: { _ in candidate }, activateWindow: { _ in activated = true })
+        manager.focusNextDisplay()
+        XCTAssertFalse(activated)
+    }
+
+    func testSingleDisplayAndOffscreenFocusDoNotWarpCursor() {
+        let saved = Defaults.traverseSingleScreen.toCodable()
+        defer { Defaults.traverseSingleScreen.load(from: saved) }
+        Defaults.traverseSingleScreen.enabled = true
+        let screen = TestScreen(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        for frame in [screen.frame, CGRect(x: 5000, y: 5000, width: 100, height: 100), .zero] {
+            var warps = 0
+            let manager = DisplayFocusManager(screenDetection: ScreenDetection(screens: { [screen] }, logicalFrame: { _ in nil }),
+                frontWindowProvider: { TestWindow(frame: frame.screenFlipped) }, warpCursor: { _ in warps += 1; return .success },
+                coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                mousePressed: { false })
+            manager.focusNextDisplay()
+            XCTAssertEqual(warps, 0)
+        }
     }
 
     func testSelectsFrontmostOrdinaryWindowCenteredOnDestinationDisplay() throws {
@@ -9327,6 +9412,18 @@ final class WindowSizeConstraintExecutionTests: XCTestCase {
         assertCrossDisplayWarning(clampedAttempts: 2, expectsWarning: false)
     }
 
+    func testRestoreFromDisconnectedDisplayKeepsWindowReachable() {
+        let screen = TestScreen(frame: CGRect(x: 0, y: 0, width: 1512, height: 900))
+        let window = ClampingWindow(targetSize: CGSize(width: 504, height: 900))
+        let manager = TestWindowManager(screenDetection: TestScreenDetection(source: screen))
+        let saved = CGRect(x: 3000, y: 100, width: 900, height: 500)
+        AppDelegate.windowHistory.restoreRects[windowId] = saved
+        manager.execute(ExecutionParameters(.restore, windowElement: window, windowId: windowId, source: .menuItem))
+        XCTAssertTrue(screen.frame.screenFlipped.contains(window.frame))
+        XCTAssertEqual(window.frame.size, saved.size)
+        XCTAssertEqual(AppDelegate.windowHistory.restoreRects[windowId], saved)
+    }
+
     func testPersistentlyClampedCrossDisplayRetryWarnsOnceOnDestination() {
         assertCrossDisplayWarning(clampedAttempts: nil, expectsWarning: true)
     }
@@ -9356,6 +9453,36 @@ final class WindowSizeConstraintExecutionTests: XCTestCase {
         XCTAssertTrue(manager.warningScreens.isEmpty)
         XCTAssertEqual(AppDelegate.windowHistory.lastRectangleActions[windowId]?.rect, newerFrame)
         XCTAssertEqual(AppDelegate.windowHistory.lastRectangleActions[windowId]?.action, .firstTwoThirds)
+    }
+
+    func testSpaceChangeDisconnectAndSleepCancelPendingCrossDisplayRetry() {
+        for scenario in 0..<4 {
+            let source = TestScreen(frame: CGRect(x: 0, y: 0, width: 1512, height: 900))
+            let destination = TestScreen(frame: CGRect(x: 1512, y: 0, width: 1512, height: 900))
+            let window = ClampingWindow(targetSize: CGSize(width: 504, height: 900))
+            let detection = TestScreenDetection(source: source)
+            let workspace = NotificationCenter(), app = NotificationCenter()
+            let manager = TestWindowManager(screenDetection: detection,
+                coordinator: SpaceOperationCoordinator(environmentIsSafe: { true }, workspaceNotificationCenter: NotificationCenter()),
+                notificationCenter: app, workspaceNotificationCenter: workspace)
+            manager.execute(ExecutionParameters(.lastThird, screen: destination, windowElement: window,
+                                                windowId: windowId, source: .menuItem))
+            XCTAssertEqual(window.resizeAttempts, 2)
+            let interruptedFrame = window.frame
+            switch scenario {
+            case 0: workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+            case 1: app.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            case 2: workspace.post(name: NSWorkspace.willSleepNotification, object: nil)
+            default: detection.connected = false
+            }
+            let completion = expectation(description: "Interrupted cross-display retry must not complete")
+            completion.isInverted = true
+            manager.didFinish = { completion.fulfill() }
+            wait(for: [completion], timeout: 0.07)
+            XCTAssertEqual(window.resizeAttempts, 2)
+            XCTAssertEqual(window.frame, interruptedFrame)
+            XCTAssertTrue(manager.warningScreens.isEmpty)
+        }
     }
 
     private func assertCrossDisplayWarning(clampedAttempts: Int?, expectsWarning: Bool) {
@@ -9404,6 +9531,8 @@ final class WindowSizeConstraintExecutionTests: XCTestCase {
         let source: NSScreen
 
         init(source: NSScreen) { self.source = source }
+        var connected = true
+        override func isAvailable(_ screen: NSScreen) -> Bool { connected && screen.frame.isFiniteAndNonEmpty }
 
         override func detectScreens(using frontmostWindowElement: AccessibilityElement?) -> UsableScreens? {
             UsableScreens(currentScreen: source, numScreens: 2)
@@ -9565,6 +9694,7 @@ final class CrossDisplayResizeTests: XCTestCase {
         init(source: NSScreen) {
             self.source = source
         }
+        override func isAvailable(_ screen: NSScreen) -> Bool { screen.frame.isFiniteAndNonEmpty }
 
         override func detectScreens(using frontmostWindowElement: AccessibilityElement?) -> UsableScreens? {
             UsableScreens(currentScreen: source, numScreens: 2)
@@ -9621,6 +9751,51 @@ final class SpaceDisplayReliabilityTests: XCTestCase {
         override var hash: Int { ObjectIdentifier(self).hashValue }
     }
 
+    func testStaggeredDisplayOrderingIsDeterministicForEveryEnumeration() {
+        let saved = Defaults.screensOrderedByX.value
+        defer { Defaults.screensOrderedByX.value = saved }
+        Defaults.screensOrderedByX.value = .yThenMinX
+        let top = Screen(CGRect(x: 900, y: 600, width: 600, height: 600))
+        let middle = Screen(CGRect(x: 300, y: 300, width: 600, height: 600))
+        let bottom = Screen(CGRect(x: 0, y: 0, width: 600, height: 600))
+        let permutations = [[top, middle, bottom], [top, bottom, middle], [middle, top, bottom],
+                            [middle, bottom, top], [bottom, top, middle], [bottom, middle, top]]
+        for screens in permutations {
+            XCTAssertEqual(ScreenDetection().order(screens: screens).map(\.frame), [middle.frame, top.frame, bottom.frame])
+        }
+    }
+
+    func testEmptyDisconnectedAndInvalidDisplayGeometryDoesNotSelectAnUnrelatedScreen() throws {
+        let left = Screen(CGRect(x: 0, y: 0, width: 600, height: 400))
+        let right = Screen(CGRect(x: 600, y: 0, width: 600, height: 400))
+        var available: [NSScreen] = [left, right]
+        let detection = ScreenDetection(screens: { available })
+        XCTAssertNil(detection.screenContaining(CGRect(x: 9000, y: 9000, width: 100, height: 100), screens: available))
+        XCTAssertNil(detection.screenContaining(.zero, screens: available))
+        XCTAssertTrue(detection.isAvailable(right))
+        available = [left]
+        XCTAssertFalse(detection.isAvailable(right))
+        available = [Screen(CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 100))]
+        XCTAssertNil(detection.detectScreens(using: nil))
+        available = []
+        XCTAssertNil(detection.detectScreensAtCursor())
+        XCTAssertEqual(CGRect(x: 1, y: 2, width: 3, height: 4).screenFlipped(primaryScreenMaxY: nil),
+                       CGRect(x: 1, y: 2, width: 3, height: 4))
+    }
+
+    func testUnmatchedWindowUsesOrderedFallbackWithRealNeighbors() throws {
+        let saved = Defaults.screensOrderedByX.value
+        defer { Defaults.screensOrderedByX.value = saved }
+        Defaults.screensOrderedByX.value = .minX
+        let left = Screen(CGRect(x: -600, y: 0, width: 600, height: 400))
+        let middle = Screen(CGRect(x: 0, y: 0, width: 600, height: 400))
+        let right = Screen(CGRect(x: 600, y: 0, width: 600, height: 400))
+        let screens = try XCTUnwrap(ScreenDetection(screens: { [right, middle, left] }).detectScreens(using: nil))
+        XCTAssertTrue(screens.currentScreen === left)
+        XCTAssertTrue(screens.adjacentScreens?.next === middle)
+        XCTAssertTrue(screens.adjacentScreens?.prev === right)
+    }
+
     private func display(current: Any = NSNumber(value: 10), spaces: [[String: Any]]? = nil) -> [String: Any] {
         ["Display Identifier": "A", "Current Space": ["id64": current],
          "Spaces": spaces ?? [["id64": 10, "type": 0], ["id64": 20, "type": 0]]]
@@ -9662,6 +9837,45 @@ final class SpaceDisplayReliabilityTests: XCTestCase {
         XCTAssertEqual(CoreGraphicsSpaceMoveEventPoster.systemShortcut(for: .next, defaults: defaults).1, [.maskControl, .maskSecondaryFn])
     }
 
+    func testSpecificDisplayPreservesAutoMaximizeLikeNextDisplay() {
+        let saved = Defaults.autoMaximize.toCodable()
+        defer { Defaults.autoMaximize.load(from: saved) }
+        Defaults.autoMaximize.enabled = true
+        let rect = CGRect(x: 10, y: 20, width: 300, height: 200)
+        let bounds = CGRect(x: 600, y: -400, width: 1200, height: 900)
+        let params = RectCalculationParameters(window: Window(id: nil, rect: rect), visibleFrameOfScreen: bounds,
+                                               action: .displayTwo, lastAction: RectangleAction(action: .maximize, rect: rect))
+        XCTAssertEqual(SpecificDisplayCalculation().calculateRect(params).rect, NextPrevDisplayCalculation().calculateRect(params).rect)
+        XCTAssertEqual(SpecificDisplayCalculation().calculateRect(params).resultingAction, .maximize)
+    }
+
+    func testPreviousDisplayMoveIsNotReplayedAsACenterAction() throws {
+        let settings: [(Default, CodableDefault)] = [
+            (Defaults.attemptMatchOnNextPrevDisplay, CodableDefault(int: 1)),
+            (Defaults.centerAcrossDisplays, CodableDefault(int: 1)),
+            (Defaults.combinedDisplayMode, CodableDefault(int: 2)),
+            (Defaults.stageSize, CodableDefault(float: 0)), (Defaults.todo, CodableDefault(int: 2)),
+            (Defaults.screenEdgeGapLeft, CodableDefault(float: 0)), (Defaults.screenEdgeGapRight, CodableDefault(float: 0)),
+            (Defaults.screenEdgeGapTop, CodableDefault(float: 0)), (Defaults.screenEdgeGapBottom, CodableDefault(float: 0))
+        ]
+        let saved = settings.map { ($0.0, $0.0.toCodable()) }
+        defer { saved.forEach { $0.0.load(from: $0.1) } }
+        settings.forEach { $0.0.load(from: $0.1) }
+        let source = Screen(CGRect(x: 0, y: 0, width: 1000, height: 800))
+        let destination = Screen(CGRect(x: 1000, y: 0, width: 1200, height: 900))
+        let window = CGRect(x: 100, y: 100, width: 200, height: 200)
+        let screens = UsableScreens(currentScreen: source, adjacentScreens: AdjacentScreens(prev: destination, next: destination),
+                                    numScreens: 2, screensOrdered: [source, destination])
+        for action in [WindowAction.nextDisplay, .displayTwo] {
+            let params = WindowCalculationParameters(window: Window(id: nil, rect: window), usableScreens: screens,
+                action: action, lastAction: RectangleAction(action: .nextDisplay, rect: window.screenFlipped), ignoreTodo: true)
+            let calculation: WindowCalculation = action == .nextDisplay ? NextPrevDisplayCalculation() : SpecificDisplayCalculation()
+            let result = try XCTUnwrap(calculation.calculate(params))
+            XCTAssertEqual(result.rect, NextPrevDisplayCalculation.relativePositionedRect(window: window,
+                source: source.adjustedVisibleFrame(true), destination: destination.adjustedVisibleFrame(true)))
+            XCTAssertEqual(result.resultingAction, action)
+        }
+    }
 }
 
 final class NextPrevDisplayMappingTests: XCTestCase {
@@ -9728,6 +9942,13 @@ final class NextPrevDisplayMappingTests: XCTestCase {
             NextPrevDisplayCalculation.relativePositionedRect(window: window, source: frame, destination: frame),
             window
         )
+    }
+
+    func testOversizedWindowIsReducedToFitDestination() {
+        let source = CGRect(x: -1000, y: -300, width: 1000, height: 600)
+        let destination = CGRect(x: 100, y: 50, width: 500, height: 400)
+        let window = CGRect(x: -1200, y: -500, width: 1400, height: 1000)
+        XCTAssertEqual(NextPrevDisplayCalculation.relativePositionedRect(window: window, source: source, destination: destination), destination)
     }
 }
 

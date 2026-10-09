@@ -23,11 +23,8 @@ class NextPrevDisplayCalculation: WindowCalculation {
         
         if Defaults.attemptMatchOnNextPrevDisplay.userEnabled,
            let lastAction = params.lastAction,
+           lastAction.action.classification != .display,
            let calculation = WindowCalculationFactory.calculationsByAction[lastAction.action] {
-            
-            if let windowId = params.window.id {
-                AppDelegate.windowHistory.lastRectangleActions.removeValue(forKey: windowId)
-            }
             
             let newCalculationParams = RectCalculationParameters(
                 window: rectParams.window,
@@ -35,8 +32,10 @@ class NextPrevDisplayCalculation: WindowCalculation {
                 action: lastAction.action,
                 lastAction: nil)
             let rectResult = calculation.calculateRect(newCalculationParams)
-            
-            return WindowCalculationResult(rect: rectResult.rect, screen: screen, resultingAction: lastAction.action)
+            if rectResult.rect.isFiniteAndNonEmpty {
+                if let windowId = params.window.id { AppDelegate.windowHistory.lastRectangleActions.removeValue(forKey: windowId) }
+                return WindowCalculationResult(rect: rectResult.rect, screen: screen, resultingAction: lastAction.action)
+            }
         }
         
         let sourceFrame = params.usableScreens.currentScreen.adjustedVisibleFrame(params.ignoreTodo)
@@ -94,7 +93,7 @@ class NextPrevDisplayCalculation: WindowCalculation {
     /// next/previous-display and specific-display moves when `attemptMatchOnNextPrevDisplay` is on
     /// but there is no Rectangle snap action to replay (issue #1723).
     static func relativePositionedRect(window: CGRect, source: CGRect, destination: CGRect) -> CGRect {
-        guard source.width > 0, source.height > 0 else { return window }
+        guard window.isFiniteAndNonEmpty, source.isFiniteAndNonEmpty, destination.isFiniteAndNonEmpty else { return window }
 
         let originXFrac = (window.minX - source.minX) / source.width
         let originYFrac = (window.minY - source.minY) / source.height
@@ -103,8 +102,8 @@ class NextPrevDisplayCalculation: WindowCalculation {
 
         var rect = CGRect(x: destination.minX + originXFrac * destination.width,
                           y: destination.minY + originYFrac * destination.height,
-                          width: widthFrac * destination.width,
-                          height: heightFrac * destination.height)
+                          width: min(widthFrac * destination.width, destination.width),
+                          height: min(heightFrac * destination.height, destination.height))
 
         if rect.maxX > destination.maxX {
             rect.origin.x = destination.maxX - rect.width

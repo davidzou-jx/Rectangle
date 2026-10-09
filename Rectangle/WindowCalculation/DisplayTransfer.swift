@@ -34,10 +34,14 @@ class DisplayTransfer {
     /// How far from the screen edge a window edge can be and still count as being against it.
     /// Windows are rarely placed to the exact point - the accessibility API rounds and apps round
     /// to their own grid - and with gaps turned on nothing is ever flush to begin with.
-    static var edgeTolerance: CGFloat { 4 + Defaults.gapSize.cgFloat }
+    static var edgeTolerance: CGFloat {
+        let gap = Defaults.gapSize.cgFloat
+        return 4 + (gap.isFinite ? max(0, gap) : 0)
+    }
 
     static func transferredRect(window: CGRect, source: CGRect, destination: CGRect, edgeTolerance: CGFloat = DisplayTransfer.edgeTolerance) -> (rect: CGRect, sharedEdges: Edge) {
-        guard source.width > 0, source.height > 0, destination.width > 0, destination.height > 0 else {
+        guard window.isFiniteAndNonEmpty, source.isFiniteAndNonEmpty, destination.isFiniteAndNonEmpty,
+              edgeTolerance.isFinite, edgeTolerance >= 0 else {
             return (window, .none)
         }
 

@@ -14,7 +14,7 @@ class ScreenDetection {
     }
 
     func detectScreens(using frontmostWindowElement: AccessibilityElement?) -> UsableScreens? {
-        let screens = availableScreens()
+        let screens = availableScreens().filter { $0.frame.isFiniteAndNonEmpty }
         guard let firstScreen = screens.first else { return nil }
         
         if screens.count == 1 {
@@ -29,8 +29,10 @@ class ScreenDetection {
         // Route repeated actions using the destination instead of an intermediate animation frame.
         let windowFrame = frontmostWindowElement.map { logicalFrame($0) ?? $0.frame } ?? .zero
         guard let sourceScreen: NSScreen = screenContaining(windowFrame, screens: screensOrdered) else {
-            let adjacentScreens = AdjacentScreens(prev: firstScreen, next: firstScreen)
-            return UsableScreens(currentScreen: firstScreen, adjacentScreens: adjacentScreens, numScreens: screens.count, screensOrdered: screensOrdered)
+            let fallback = screensOrdered[0]
+            return UsableScreens(currentScreen: fallback,
+                                 adjacentScreens: adjacent(toFrameOfScreen: fallback.frame, screens: screensOrdered),
+                                 numScreens: screens.count, screensOrdered: screensOrdered)
         }
         
         let adjacentScreens = adjacent(toFrameOfScreen: sourceScreen.frame, screens: screensOrdered)
@@ -39,7 +41,8 @@ class ScreenDetection {
     }
 
     func detectScreensAtCursor() -> UsableScreens? {
-        let screens = availableScreens()
+        let screens = availableScreens().filter { $0.frame.isFiniteAndNonEmpty }
+        guard !screens.isEmpty else { return nil }
         if screens.count == 1 {
             return detectScreens(using: nil)
         }
@@ -57,7 +60,8 @@ class ScreenDetection {
     }
 
     func screenContaining(_ rect: CGRect, screens: [NSScreen]) -> NSScreen? {
-        var result: NSScreen? = NSScreen.main
+        guard rect.isFiniteAndNonEmpty else { return nil }
+        var result: NSScreen?
         var largestPercentageOfRectWithinFrameOfScreen: CGFloat = 0.0
         for currentScreen in screens {
             let currentFrameOfScreen = NSRectToCGRect(currentScreen.frame)
@@ -76,6 +80,7 @@ class ScreenDetection {
     }
 
     func percentageOf(_ rect: CGRect, withinFrameOfScreen frameOfScreen: CGRect) -> CGFloat {
+        guard rect.isFiniteAndNonEmpty, frameOfScreen.isFiniteAndNonEmpty else { return 0 }
         let intersectionOfRectAndFrameOfScreen: CGRect = rect.intersection(frameOfScreen)
         var result: CGFloat = 0.0
         if !intersectionOfRectAndFrameOfScreen.isNull {
@@ -113,23 +118,42 @@ class ScreenDetection {
     }
 
     func order(screens: [NSScreen]) -> [NSScreen] {
+        // A canonical tie order makes vertical stacks
+        // independent of AppKit's enumeration order after reconnecting a display.
+        let canonical = screens.sorted {
+            if $0.frame.maxY != $1.frame.maxY { return $0.frame.maxY > $1.frame.maxY }
+            if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+            if $0.frame.minY != $1.frame.minY { return $0.frame.minY > $1.frame.minY }
+            return $0.frame.width < $1.frame.width
+        }
         switch Defaults.screensOrderedByX.value {
             
         case .midX:
-            return screens.sorted(by: { $0.frame.midX < $1.frame.midX })
+            return canonical.sorted(by: { $0.frame.midX < $1.frame.midX })
         case .minX:
-            return screens.sorted(by: { $0.frame.minX < $1.frame.minX })
+            return canonical.sorted(by: { $0.frame.minX < $1.frame.minX })
         case .yThenMinX:
-            let sortedScreens = screens.sorted(by: { screen1, screen2 in
-                if screen2.frame.maxY <= screen1.frame.minY {
-                    return true
+            // Pairwise vertical-overlap comparisons are not transitive for a
+            // staggered chain of monitors. Build rows with a common vertical
+            // intersection, then order each row from left to right.
+            var rows = [[NSScreen]]()
+            var rowBottom: CGFloat = 0
+            for screen in canonical {
+                if !rows.isEmpty, screen.frame.maxY > rowBottom {
+                    rows[rows.count - 1].append(screen)
+                    rowBottom = max(rowBottom, screen.frame.minY)
+                } else {
+                    rows.append([screen])
+                    rowBottom = screen.frame.minY
                 }
-                if screen1.frame.maxY <= screen2.frame.minY {
-                    return false
-                }
-                return screen1.frame.minX < screen2.frame.minX
-            })
-            return sortedScreens
+            }
+            return rows.flatMap { $0.sorted { $0.frame.minX < $1.frame.minX } }
+        }
+    }
+
+    func isAvailable(_ screen: NSScreen) -> Bool {
+        availableScreens().contains {
+            ($0 === screen || screen.isEqual($0)) && $0.frame == screen.frame && $0.frame.isFiniteAndNonEmpty
         }
     }
     
@@ -412,6 +436,7 @@ extension NSScreen {
         } else {
             newFrame = DockUtil.correctedVisibleFrame(for: self, snapshot: dockSnapshot)
         }
+        let unreservedFrame = newFrame
 
         if !ignoreStage && Defaults.stageSize.value > 0 {
             if StageUtil.stageCapable && StageUtil.stageEnabled && StageUtil.stageStripShow && StageUtil.isStageStripVisible(self) {
@@ -435,7 +460,7 @@ extension NSScreen {
         }
 
         if Defaults.screenEdgeGapsOnMainScreenOnly.enabled, self != NSScreen.screens.first {
-            return newFrame
+            return newFrame.isFiniteAndNonEmpty ? newFrame : unreservedFrame
         }
 
         newFrame.origin.x += Defaults.screenEdgeGapLeft.cgFloat
@@ -443,6 +468,10 @@ extension NSScreen {
         newFrame.size.width -= (Defaults.screenEdgeGapLeft.cgFloat + Defaults.screenEdgeGapRight.cgFloat)
         newFrame.size.height -= (Defaults.screenEdgeGapTopNotch.cgFloat + Defaults.screenEdgeGapBottom.cgFloat)
         
+        if !newFrame.isFiniteAndNonEmpty {
+            Logger.log("Ignoring screen reservations that leave no usable display area")
+            return unreservedFrame
+        }
         return newFrame
     }
 

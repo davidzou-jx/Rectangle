@@ -23,11 +23,8 @@ class SpecificDisplayCalculation: WindowCalculation {
 
         if Defaults.attemptMatchOnNextPrevDisplay.userEnabled,
            let lastAction = params.lastAction,
+           lastAction.action.classification != .display,
            let calculation = WindowCalculationFactory.calculationsByAction[lastAction.action] {
-
-            if let windowId = params.window.id {
-                AppDelegate.windowHistory.lastRectangleActions.removeValue(forKey: windowId)
-            }
 
             let newCalculationParams = RectCalculationParameters(
                 window: rectParams.window,
@@ -35,8 +32,10 @@ class SpecificDisplayCalculation: WindowCalculation {
                 action: lastAction.action,
                 lastAction: nil)
             let rectResult = calculation.calculateRect(newCalculationParams)
-
-            return WindowCalculationResult(rect: rectResult.rect, screen: targetScreen, resultingAction: lastAction.action)
+            if rectResult.rect.isFiniteAndNonEmpty {
+                if let windowId = params.window.id { AppDelegate.windowHistory.lastRectangleActions.removeValue(forKey: windowId) }
+                return WindowCalculationResult(rect: rectResult.rect, screen: targetScreen, resultingAction: lastAction.action)
+            }
         }
 
         // Parity with NextPrevDisplayCalculation: display 1/2/3 moves behave like next/prev moves.
@@ -80,6 +79,9 @@ class SpecificDisplayCalculation: WindowCalculation {
     }
 
     override func calculateRect(_ params: RectCalculationParameters) -> RectResult {
+        if params.lastAction?.action == .maximize && !Defaults.autoMaximize.userDisabled {
+            return RectResult(WindowCalculationFactory.maximizeCalculation.calculateRect(params).rect, resultingAction: .maximize)
+        }
         return WindowCalculationFactory.centerCalculation.calculateRect(params)
     }
 }

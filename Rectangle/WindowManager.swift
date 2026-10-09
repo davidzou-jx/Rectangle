@@ -10,12 +10,18 @@ class WindowManager {
     private let windowAnimator: WindowAnimator
     private var windowSizeWarning: WindowSizeWarning?
     private var executionID = 0
+    private let coordinator: SpaceOperationCoordinator
+    private var interruptionObservers = [(NotificationCenter, NSObjectProtocol)]()
     
     init(screenDetection: ScreenDetection = ScreenDetection(),
-         windowAnimator: WindowAnimator = WindowAnimator.shared) {
+         windowAnimator: WindowAnimator = WindowAnimator.shared,
+         coordinator: SpaceOperationCoordinator = .shared,
+         notificationCenter: NotificationCenter = .default,
+         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter) {
         
         self.screenDetection = screenDetection
         self.windowAnimator = windowAnimator
+        self.coordinator = coordinator
         standardWindowMoverChain = [
             StandardWindowMover(),
             EdgeAlignmentWindowMover(),
@@ -26,7 +32,21 @@ class WindowManager {
             FixedSizeWindowMover(),
             BestEffortWindowMover()
         ]
+        for (center, names) in [(notificationCenter, [NSApplication.didChangeScreenParametersNotification]),
+                                (workspaceNotificationCenter, [NSWorkspace.activeSpaceDidChangeNotification,
+                                                               NSWorkspace.willSleepNotification,
+                                                               NSWorkspace.sessionDidResignActiveNotification])] {
+            for name in names {
+                let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    self?.executionID &+= 1
+                    self?.hideSizeConstraintWarning()
+                }
+                interruptionObservers.append((center, observer))
+            }
+        }
     }
+
+    deinit { for (center, observer) in interruptionObservers { center.removeObserver(observer) } }
     
     func logicalFrame(for element: AccessibilityElement) -> CGRect {
         windowAnimator.destination(for: element) ?? element.frame
@@ -55,6 +75,7 @@ class WindowManager {
     }
     
     func execute(_ parameters: ExecutionParameters) {
+        guard coordinator.canContinue, !coordinator.isOperationInProgress else { return }
         hideSizeConstraintWarning()
 
         guard let frontmostWindowElement = parameters.windowElement ?? AccessibilityElement.getFrontWindowElement()
@@ -75,12 +96,28 @@ class WindowManager {
                 NSSound.beep()
                 return
             }
-            if let restoreRect = AppDelegate.windowHistory.restoreRects[windowId] {
+            if var restoreRect = AppDelegate.windowHistory.restoreRects[windowId] {
+                guard restoreRect.isFiniteAndNonEmpty,
+                      let screens = screenDetection.detectScreens(using: frontmostWindowElement) else { return }
+                let originalScreen = screenDetection.screenContaining(restoreRect, screens: screens.screensOrdered)
+                let restoreScreen = originalScreen ?? screens.currentScreen
+                if originalScreen == nil {
+                    // Saved history can refer to a display that was unplugged.
+                    // Keep the restored window reachable on the current display.
+                    let bounds = restoreScreen.adjustedVisibleFrame(TodoManager.isTodoWindow(windowId)).screenFlipped
+                    guard bounds.isFiniteAndNonEmpty else { return }
+                    restoreRect.size.width = min(restoreRect.width, bounds.width)
+                    restoreRect.size.height = min(restoreRect.height, bounds.height)
+                    restoreRect.origin.x = min(max(restoreRect.minX, bounds.minX), bounds.maxX - restoreRect.width)
+                    restoreRect.origin.y = min(max(restoreRect.minY, bounds.minY), bounds.maxY - restoreRect.height)
+                }
                 executionID &+= 1
                 let currentExecutionID = executionID
                 if WindowAnimator.enabled, frontmostWindowElement.isResizable() {
                     windowAnimator.animate(frontmostWindowElement, to: restoreRect, profile: parameters.source == .keyboardShortcut ? .keyboard : .standard) { [weak self] frame in
-                        guard let self, self.executionID == currentExecutionID else { return }
+                        guard let self, self.executionID == currentExecutionID,
+                              self.coordinator.canContinue, !self.coordinator.isOperationInProgress,
+                              self.screenDetection.isAvailable(restoreScreen) else { return }
                         // A completed animation has already placed the real window.
                         if frame.isNull { frontmostWindowElement.setFrame(restoreRect) }
                     }
@@ -98,6 +135,7 @@ class WindowManager {
         let sourceScreens = screenDetection.detectScreens(using: frontmostWindowElement)
         var screens: UsableScreens?
         if let screen = parameters.screen {
+            guard screenDetection.isAvailable(screen) else { return }
             screens = UsableScreens(currentScreen: screen, numScreens: 1)
         } else {
             screens = Defaults.useCursorScreenDetection.enabled
@@ -135,9 +173,9 @@ class WindowManager {
         let ignoreTodo = windowId.map { TodoManager.isTodoWindow($0) } ?? false
         
         if frontmostWindowElement.isSheet == true
-            || currentWindowRect.isNull
-            || usableScreens.frameOfCurrentScreen.isNull
-            || usableScreens.currentScreen.adjustedVisibleFrame(ignoreTodo).isNull {
+            || !currentWindowRect.isFiniteAndNonEmpty
+            || !usableScreens.frameOfCurrentScreen.isFiniteAndNonEmpty
+            || !usableScreens.currentScreen.adjustedVisibleFrame(ignoreTodo).isFiniteAndNonEmpty {
             NSSound.beep()
             Logger.log("Window is not snappable or usable screen is not valid")
             return
@@ -231,7 +269,8 @@ class WindowManager {
             && !Defaults.cooperativeCornerResize.enabled
         
         let completeMove = { [self] (animationHandledPlacement: Bool) in
-            guard executionID == currentExecutionID else { return }
+            guard executionID == currentExecutionID, coordinator.canContinue, !coordinator.isOperationInProgress,
+                  screenDetection.isAvailable(calcResult.screen) else { return }
             var resultingRect: CGRect
             if let cooperativeCornerPlan {
                 resultingRect = applyCooperativeCornerResize(result: resultParameters,
@@ -258,7 +297,9 @@ class WindowManager {
                     if calcResult.rect.size != resultingRect.size {
                         Logger.log("Final attempt to adjust across displays.")
                         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-                            guard let self, self.executionID == currentExecutionID else { return }
+                            guard let self, self.executionID == currentExecutionID,
+                                  self.coordinator.canContinue, !self.coordinator.isOperationInProgress,
+                                  self.screenDetection.isAvailable(calcResult.screen) else { return }
                             let finalRect = self.apply(result: resultParameters)
                             self.windowMovedAcrossDisplays(windowElement: frontmostWindowElement, resultingRect: finalRect)
                             self.postProcess(result: resultParameters, resultingRect: finalRect, incrementCount: !animated)
