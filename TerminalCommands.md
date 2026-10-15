@@ -69,13 +69,26 @@ defaults write com.knollsoft.Rectangle menuBarSpaceNumberLeftInset -float 4
 defaults write com.knollsoft.Rectangle menuBarSpaceNumberBottomInset -float 0
 ```
 
-At horizontal inset `0`, each number and its transparent outline sit just outside the window graphic's canvas, with no overlap. Positive insets move the number inward by that many points; negative values add a gap. The default `4` gives roughly half-digit overlap at the default font size and border width. The menu item's width grows or shrinks to fit the window graphic and both badges, including multi-digit numbers and outward offsets. The bottom inset moves both numbers upward from their lowest outlined position; its default is `0` to use the space near the bottom of the menu bar. Font size is limited to 6–14 points and outline width to 0–3 points; zero removes the outline. Insets are bounded to ±64 points to keep extreme values safe.
+At horizontal inset `0`, each number and its transparent outline sit just outside the label (or the window graphic's canvas), with no overlap. Positive insets move the number inward by that many points; negative values add a gap. The default `4` gives roughly half-digit overlap at the default font size and border width. The menu item's width grows or shrinks to fit the graphic and both badges, including multi-digit numbers and outward offsets. The bottom inset moves both numbers upward from their lowest outlined position; its default is `0` to use the space near the bottom of the menu bar. Font size is limited to 6–14 points and outline width to 0–3 points; zero removes the outline. Insets are bounded to ±64 points to keep extreme values safe.
 
 To hide both numbers, or enable them again:
 
 ```bash
 defaults write com.knollsoft.Rectangle menuBarSpaceNumber -int 2 # hide
 defaults write com.knollsoft.Rectangle menuBarSpaceNumber -int 1 # show (default)
+```
+
+App Settings includes **Use Yabai Space label as menu bar icon**, with an editable **Label delimiter** (default `-`). When enabled, the focused Space's Yabai label replaces the window graphic: its first delimiter-separated part is trimmed to three characters and centered in the icon, with the internal/external Space numbers overlaid at the bottom corners. Their transparent outlines separate them from the label underneath. For example, `Work-project` displays `Wor`. An empty delimiter uses the first three characters of the entire label. An absent label restores the window graphic with the same number positions.
+
+The `StatusItemSpaceLabelStyle` constants at the top of [StatusItemSpaceBadge.swift](Rectangle/StatusItemSpaceBadge.swift) control label font size, truncation length, default delimiter, label width limit, and optical clearance above the badges. The label uses a 13-point bold font and a 36-point width limit; the item reserves additional width for any part of a badge outside that label. `StatusItemIconLayout` keeps the 22-point canvas height, 2 points of top padding, and no extra bottom padding. It also defines horizontal padding and a maximum badge width for fitting unusually long numbers.
+
+Labels receive a small horizontal optical correction based on their rendered ink, giving the main letter bodies more weight than ascenders and descenders. This approximates perceived centering for words such as `Web`, whose diagonal `W` can make geometric centering look uneven. The correction is capped at 1.5 points and 5% of the label width. `opticalCenteringStrength` (set to `0` to disable), `maximumOpticalOffset`, and `ascenderDescenderWeight` tune it. Equal space is reserved around the label for the farther badge, so differing digit widths cannot pull it off-center; the total width still follows the layout. Badge anchors include the correction's small padding, preserving no overlap at inset `0`.
+
+Yabai must be installed and running. Rectangle reads labels in the background; if the query fails, times out, or returns an empty label/prefix, it uses the window icon. These settings apply immediately in App Settings and are included in configuration exports. They can also be set through Terminal followed by a restart:
+
+```bash
+defaults write com.knollsoft.Rectangle menuBarYabaiLabel -bool true
+defaults write com.knollsoft.Rectangle menuBarYabaiLabelDelimiter -string '-'
 ```
 
 ## Change how Move to Space switches Spaces

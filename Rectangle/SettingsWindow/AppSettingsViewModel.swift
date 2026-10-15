@@ -26,6 +26,20 @@ final class AppSettingsViewModel {
         }
     }
 
+    var menuBarYabaiLabel: Bool {
+        didSet {
+            Defaults.menuBarYabaiLabel.enabled = menuBarYabaiLabel
+            RectangleStatusItem.instance.refreshVisibility()
+        }
+    }
+
+    var menuBarYabaiLabelDelimiter: String {
+        didSet {
+            Defaults.menuBarYabaiLabelDelimiter.value = menuBarYabaiLabelDelimiter
+            RectangleStatusItem.instance.refreshVisibility()
+        }
+    }
+
      var hasPendingUpdate: Bool = false
      var versionString: String = ""
 
@@ -40,6 +54,8 @@ final class AppSettingsViewModel {
     init() {
         self.launchOnLogin = Defaults.launchOnLogin.enabled
         self.hideMenuBarIcon = Defaults.hideMenuBarIcon.enabled
+        self.menuBarYabaiLabel = Defaults.menuBarYabaiLabel.enabled
+        self.menuBarYabaiLabelDelimiter = Defaults.menuBarYabaiLabelDelimiter.value ?? StatusItemSpaceLabelStyle.defaultDelimiter
         self.checkForUpdatesAutomatically = AppDelegate.instance.updaterController?.updater.automaticallyChecksForUpdates ?? false
         self.hasPendingUpdate = AppDelegate.instance.hasPendingUpdate
         self.allowAnyShortcut = Defaults.allowAnyShortcut.enabled
@@ -68,6 +84,8 @@ final class AppSettingsViewModel {
     func reloadFromDefaults() {
         self.launchOnLogin = Defaults.launchOnLogin.enabled
         self.hideMenuBarIcon = Defaults.hideMenuBarIcon.enabled
+        self.menuBarYabaiLabel = Defaults.menuBarYabaiLabel.enabled
+        self.menuBarYabaiLabelDelimiter = Defaults.menuBarYabaiLabelDelimiter.value ?? StatusItemSpaceLabelStyle.defaultDelimiter
         self.allowAnyShortcut = Defaults.allowAnyShortcut.enabled
     }
 

@@ -27,10 +27,15 @@ class RectangleStatusItem {
     private var spaceObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var spaceRefreshTimer: Timer?
     private var imageConfiguration: ImageConfiguration?
+    private let yabaiLabelReader = YabaiSpaceLabelReader()
+    private var yabaiLabel: String?
+    private var labelQueryInFlight = false
+    private var labelGeneration: UInt64 = 0
 
     private struct ImageConfiguration: Equatable {
         let numbers: StatusItemSpaceNumbers
         let style: StatusItemSpaceBadgeStyle
+        let label: String?
     }
     
     private init() {}
@@ -86,6 +91,8 @@ class RectangleStatusItem {
     }
 
     private func stopUpdatingSpaceBadge() {
+        labelGeneration &+= 1
+        yabaiLabel = nil
         spaceRefreshTimer?.invalidate()
         spaceRefreshTimer = nil
         for (center, observer) in spaceObservers { center.removeObserver(observer) }
@@ -94,7 +101,7 @@ class RectangleStatusItem {
 
     private func startUpdatingSpaceBadge() {
         stopUpdatingSpaceBadge()
-        guard !Defaults.menuBarSpaceNumber.userDisabled else { return }
+        guard !Defaults.menuBarSpaceNumber.userDisabled || Defaults.menuBarYabaiLabel.enabled else { return }
         let workspace = NSWorkspace.shared.notificationCenter
         for (center, names) in [
             (workspace, [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification,
@@ -103,7 +110,7 @@ class RectangleStatusItem {
         ] {
             for name in names {
                 let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    self?.refreshImage()
+                    self?.refreshImage(invalidateLabel: name != NSWorkspace.didActivateApplicationNotification)
                 }
                 spaceObservers.append((center, observer))
             }
@@ -116,7 +123,29 @@ class RectangleStatusItem {
         spaceRefreshTimer = timer
     }
 
-    private func refreshImage() {
+    private func refreshImage(invalidateLabel: Bool = false) {
+        if invalidateLabel {
+            labelGeneration &+= 1
+            yabaiLabel = nil
+        }
+        renderImage()
+        guard added, Defaults.menuBarYabaiLabel.enabled, !labelQueryInFlight else { return }
+        labelQueryInFlight = true
+        let generation = labelGeneration
+        yabaiLabelReader.read { [weak self] label in
+            guard let self else { return }
+            self.labelQueryInFlight = false
+            guard self.added, Defaults.menuBarYabaiLabel.enabled else { return }
+            guard generation == self.labelGeneration else {
+                self.refreshImage()
+                return
+            }
+            self.yabaiLabel = label
+            self.renderImage()
+        }
+    }
+
+    private func renderImage() {
         guard let button = nsStatusItem?.button, let base = NSImage(named: "StatusTemplate") else { return }
         let numbers = Defaults.menuBarSpaceNumber.userDisabled ? StatusItemSpaceNumbers() : currentDesktopNumbers()
         let style = StatusItemSpaceBadgeStyle(
@@ -125,13 +154,16 @@ class RectangleStatusItem {
             rightInset: CGFloat(Defaults.menuBarSpaceNumberRightInset.value),
             leftInset: CGFloat(Defaults.menuBarSpaceNumberLeftInset.value),
             bottomInset: CGFloat(Defaults.menuBarSpaceNumberBottomInset.value))
-        let configuration = ImageConfiguration(numbers: numbers, style: style)
+        let label = Defaults.menuBarYabaiLabel.enabled
+            ? YabaiSpaceLabel.abbreviated(yabaiLabel, delimiter: Defaults.menuBarYabaiLabelDelimiter.value ?? StatusItemSpaceLabelStyle.defaultDelimiter) : nil
+        let configuration = ImageConfiguration(numbers: numbers, style: style, label: label)
         guard configuration != imageConfiguration else { return }
         imageConfiguration = configuration
-        button.image = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style)
+        button.image = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: label)
         let desktops = [numbers.externalDisplay.map { "External desktop \($0)" },
                         numbers.internalDisplay.map { "Internal desktop \($0)" }].compactMap { $0 }
-        let description = desktops.isEmpty ? "Rectangle" : "Rectangle — " + desktops.joined(separator: ", ")
+        let details = desktops + (label.map { ["Space label \($0)"] } ?? [])
+        let description = details.isEmpty ? "Rectangle" : "Rectangle — " + details.joined(separator: ", ")
         button.toolTip = description
         button.setAccessibilityLabel(description)
     }

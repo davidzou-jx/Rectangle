@@ -5,6 +5,80 @@ import MASShortcut
 import XCTest
 @testable import Rectangle
 
+final class YabaiSpaceLabelTests: XCTestCase {
+    func testUsesFirstLiteralDelimiterSeparatedPartAndThreeCharacters() {
+        XCTAssertEqual(YabaiSpaceLabel.abbreviated("Work-project", delimiter: "-"), "Wor")
+        XCTAssertEqual(YabaiSpaceLabel.abbreviated(" Web :: browser :: docs ", delimiter: "::"), "Web")
+        XCTAssertEqual(YabaiSpaceLabel.abbreviated("Dev*project", delimiter: "*"), "Dev")
+        XCTAssertEqual(YabaiSpaceLabel.abbreviated("Tools-project", delimiter: ""), "Too")
+        XCTAssertEqual(YabaiSpaceLabel.abbreviated("Hi", delimiter: "-"), "Hi")
+        XCTAssertEqual(YabaiSpaceLabel.abbreviated("👩🏽‍💻研究室-work", delimiter: "-"), "👩🏽‍💻研究")
+    }
+
+    func testMissingLabelsAndEmptyPrefixesFallBackToTheIcon() {
+        for label in [nil, "", "  \n ", "-suffix", "  -suffix"] as [String?] {
+            XCTAssertNil(YabaiSpaceLabel.abbreviated(label, delimiter: "-"))
+        }
+    }
+
+    func testDecodesFocusedSpaceResponseAndRejectsInvalidResponses() {
+        XCTAssertEqual(YabaiSpaceLabel.label(from: Data(#"{"id":57,"label":"Code-app","has-focus":true}"#.utf8)), "Code-app")
+        for invalid in ["not JSON", "[]", "{}", #"{"label":null}"#, #"{"label":42}"#] {
+            XCTAssertNil(YabaiSpaceLabel.label(from: Data(invalid.utf8)))
+        }
+    }
+
+    private func executable(_ script: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("yabai")
+        try ("#!/bin/sh\n" + script).write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        return url
+    }
+
+    func testReaderQueriesFocusedSpaceOffMainAndCompletesOnMain() throws {
+        let url = try executable(#"if [ "$*" != '-m query --spaces --space' ]; then exit 3; fi"# + "\n" +
+                                 #"printf '%s' '{"label":"Work-project"}'"#)
+        let completed = expectation(description: "Yabai label")
+        let reader = YabaiSpaceLabelReader(executableProvider: {
+            XCTAssertFalse(Thread.isMainThread)
+            return url
+        })
+        reader.read { label in
+            XCTAssertTrue(Thread.isMainThread)
+            XCTAssertEqual(label, "Work-project")
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+    }
+
+    func testMissingExecutableFailedCommandAndBadJSONReturnNoLabel() throws {
+        let invalid = try executable("printf '%s' 'invalid JSON'")
+        let urls: [URL?] = [nil, URL(fileURLWithPath: "/nonexistent/yabai"),
+                            URL(fileURLWithPath: "/usr/bin/false"), invalid]
+        let completed = urls.map { _ in expectation(description: "Fallback") }
+        for (index, url) in urls.enumerated() {
+            YabaiSpaceLabelReader(executableProvider: { url }).read { label in
+                XCTAssertNil(label)
+                completed[index].fulfill()
+            }
+        }
+        wait(for: completed, timeout: 2)
+    }
+
+    func testUnresponsiveYabaiTimesOut() throws {
+        let url = try executable("exec /bin/sleep 10")
+        let completed = expectation(description: "Timed out")
+        YabaiSpaceLabelReader(executableProvider: { url }, timeout: 0.05).read { label in
+            XCTAssertNil(label)
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 1)
+    }
+}
+
 final class StatusItemSpaceBadgeTests: XCTestCase {
     private let displays: [[String: Any]] = [
         ["Display Identifier": "A", "Current Space": ["id64": 57],
@@ -195,20 +269,55 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
         XCTAssertTrue(StatusItemSpaceBadge.image(base: base, numbers: .init(internalDisplay: 0, externalDisplay: -1), style: .init()) === base)
     }
 
-    func testRenderedIconsKeepVerticalPaddingWithCustomizedBadges() throws {
+    func testSpaceNumbersOverlayTheLabelWithTransparentOutlines() throws {
+        for scale in [1, 2] {
+            let base = baseImage()
+            let style = StatusItemSpaceBadgeStyle()
+            let numbers = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 8)
+            let labelOnly = StatusItemSpaceBadge.image(base: base, numbers: .init(), style: style, label: "Web")
+            let labelLayout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: .init(), style: style, label: "Web"))
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: style, label: "Web"))
+            let withNumbers = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: "Web")
+            XCTAssertTrue(withNumbers.isTemplate)
+            XCTAssertEqual(withNumbers.size.height, base.size.height)
+            let alignedLabel = NSImage(size: layout.size, flipped: false) { _ in
+                let origin = CGPoint(x: layout.graphicFrame.minX - labelLayout.graphicFrame.minX,
+                                     y: layout.graphicFrame.minY - labelLayout.graphicFrame.minY)
+                labelOnly.draw(in: CGRect(origin: origin, size: labelOnly.size))
+                return true
+            }
+            let labelPixels = bitmap(alignedLabel, scale: scale)
+            let pixels = bitmap(withNumbers, scale: scale)
+            var clearedLabelPixels = 0
+            for y in 0..<pixels.pixelsHigh {
+                for x in 0..<pixels.pixelsWide {
+                    if labelPixels.colorAt(x: x, y: y)!.alphaComponent > 0.5,
+                       pixels.colorAt(x: x, y: y)!.alphaComponent < 0.1 { clearedLabelPixels += 1 }
+                }
+            }
+            for number in layout.numbers {
+                XCTAssertFalse(number.frame.intersection(layout.graphicFrame).isEmpty)
+            }
+            XCTAssertGreaterThan(clearedLabelPixels, 0, "The outlines should clear the label behind the numbers")
+        }
+    }
+
+    func testRenderedIconsKeepVerticalPaddingWithLabelsAndCustomizedBadges() throws {
         let base = try XCTUnwrap(NSImage(named: "StatusTemplate"))
         for scale in [1, 2] {
-            for style in [StatusItemSpaceBadgeStyle(),
-                          StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: -100),
-                          StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: 100)] {
-                let pixels = bitmap(StatusItemSpaceBadge.image(base: base,
-                    numbers: .init(internalDisplay: 2, externalDisplay: 8), style: style), scale: scale)
-                let top = Int(StatusItemIconLayout.topMargin) * scale
-                let bottom = Int(StatusItemIconLayout.bottomMargin) * scale
-                for y in Array(0..<top) + Array((pixels.pixelsHigh - bottom)..<pixels.pixelsHigh) {
-                    for x in 0..<pixels.pixelsWide {
-                        XCTAssertEqual(pixels.colorAt(x: x, y: y)!.alphaComponent, 0,
-                                       "The top and bottom padding must stay transparent")
+            for label in [nil, "Web", "gjp", "研究室"] as [String?] {
+                for style in [StatusItemSpaceBadgeStyle(),
+                              StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: -100),
+                              StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: 100)] {
+                    let pixels = bitmap(StatusItemSpaceBadge.image(base: base,
+                        numbers: .init(internalDisplay: 2, externalDisplay: 8), style: style, label: label), scale: scale)
+                    let top = Int(StatusItemIconLayout.topMargin) * scale
+                    let bottom = Int(StatusItemIconLayout.bottomMargin) * scale
+                    for y in Array(0..<top) + Array((pixels.pixelsHigh - bottom)..<pixels.pixelsHigh) {
+                        for x in 0..<pixels.pixelsWide {
+                            XCTAssertEqual(pixels.colorAt(x: x, y: y)!.alphaComponent, 0,
+                                           "The top and bottom padding must stay transparent")
+                        }
                     }
                 }
             }
@@ -219,7 +328,7 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
         let base = NSImage(size: NSSize(width: 22, height: 22))
         let numbers = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 8)
         let zero = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
-            style: .init(rightInset: 0, leftInset: 0)))
+            style: .init(rightInset: 0, leftInset: 0), label: "Web"))
         for number in zero.numbers {
             if number.isInternal {
                 XCTAssertEqual(number.frame.minX - zero.border, zero.graphicFrame.maxX, accuracy: 0.001)
@@ -227,9 +336,9 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
                 XCTAssertEqual(number.frame.maxX + zero.border, zero.graphicFrame.minX, accuracy: 0.001)
             }
         }
-        let half = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: .init()))
+        let half = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: .init(), label: "Web"))
         let gap = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
-            style: .init(rightInset: -5, leftInset: -5)))
+            style: .init(rightInset: -5, leftInset: -5), label: "Web"))
         XCTAssertEqual(zero.size.width - half.size.width, 8, accuracy: 0.001)
         XCTAssertEqual(gap.size.width - zero.size.width, 10, accuracy: 0.001)
         for number in half.numbers {
@@ -242,10 +351,93 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
     func testDefaultBadgesUseTheExtraSpaceAtTheBottom() throws {
         let base = NSImage(size: NSSize(width: 22, height: 22))
         let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base,
-            numbers: .init(internalDisplay: 2, externalDisplay: 8), style: .init()))
+            numbers: .init(internalDisplay: 2, externalDisplay: 8), style: .init(), label: "Web"))
         for number in layout.numbers {
             XCTAssertLessThanOrEqual(number.frame.minY, 2)
             XCTAssertGreaterThanOrEqual(number.frame.minY - layout.border, 0)
+        }
+    }
+
+    func testOpticalCenteringMovesWebLeftAndReducesItsVisualImbalance() throws {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: .init(), style: .init(), label: "Web"))
+        let label = try XCTUnwrap(layout.label)
+        let frame = try XCTUnwrap(layout.labelFrame)
+        XCTAssertLessThan(label.horizontalOffset, -0.1)
+        XCTAssertLessThan(frame.midX, layout.size.width / 2)
+
+        // Evaluate visible ink in the lowercase body band, rather than the rectangle's midpoint.
+        let scale: CGFloat = 4
+        let pixels = bitmap(StatusItemSpaceBadge.image(base: base, numbers: .init(), style: .init(), label: "Web"), scale: Int(scale))
+        let xHeight = NSFont.systemFont(ofSize: StatusItemSpaceLabelStyle.fontSize, weight: .bold).xHeight
+        var weight: CGFloat = 0, moment: CGFloat = 0
+        for y in 0..<pixels.pixelsHigh {
+            let fontY = (layout.size.height - (CGFloat(y) + 0.5) / scale - frame.minY) / label.scale + label.bounds.minY
+            let bodyWeight: CGFloat = fontY >= 0 && fontY <= xHeight ? 1 : StatusItemSpaceLabelStyle.ascenderDescenderWeight
+            for x in 0..<pixels.pixelsWide {
+                let alpha = pixels.colorAt(x: x, y: y)!.alphaComponent * bodyWeight
+                weight += alpha
+                moment += (CGFloat(x) + 0.5) / scale * alpha
+            }
+        }
+        XCTAssertGreaterThan(weight, 0)
+        let center = moment / weight
+        let correctedError = abs(center - layout.size.width / 2)
+        let uncorrectedError = abs(center - label.horizontalOffset - layout.size.width / 2)
+        XCTAssertLessThan(correctedError, uncorrectedError)
+    }
+
+    func testUnequalBadgesDoNotPullTheLabelOffCenter() throws {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        for inset: CGFloat in [0, 4] {
+            let style = StatusItemSpaceBadgeStyle(rightInset: inset, leftInset: inset)
+            for numbers in [StatusItemSpaceNumbers(internalDisplay: 1, externalDisplay: 88),
+                            .init(internalDisplay: 88, externalDisplay: 1),
+                            .init(internalDisplay: 7), .init(externalDisplay: 7)] {
+                let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: style, label: "Web"))
+                XCTAssertEqual(layout.graphicFrame.midX, layout.size.width / 2, accuracy: 0.001)
+                for number in layout.numbers {
+                    XCTAssertGreaterThanOrEqual(number.frame.minX - layout.border, 0)
+                    XCTAssertLessThanOrEqual(number.frame.maxX + layout.border, layout.size.width)
+                }
+            }
+        }
+    }
+
+    func testOpticalCorrectionIsBoundedAndPreservesZeroInsetSeparation() throws {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        let neutral = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: .init(), style: .init(), label: "WWW"))
+        XCTAssertEqual(try XCTUnwrap(neutral.label).horizontalOffset, 0, accuracy: 0.01)
+        for text in ["Web", "Cal", "Foo", "iii", "研究室", "👩🏽‍💻ab", "I"] {
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base,
+                numbers: .init(internalDisplay: 2, externalDisplay: 8),
+                style: .init(rightInset: 0, leftInset: 0), label: text))
+            let label = try XCTUnwrap(layout.label)
+            let frame = try XCTUnwrap(layout.labelFrame)
+            XCTAssertLessThanOrEqual(abs(label.horizontalOffset), StatusItemSpaceLabelStyle.maximumOpticalOffset)
+            XCTAssertLessThanOrEqual(abs(label.horizontalOffset), frame.width * 0.05 + 0.001)
+            XCTAssertGreaterThanOrEqual(frame.minX, layout.graphicFrame.minX - 0.001)
+            XCTAssertLessThanOrEqual(frame.maxX, layout.graphicFrame.maxX + 0.001)
+            for number in layout.numbers {
+                XCTAssertFalse(number.frame.insetBy(dx: -layout.border, dy: 0).intersects(frame))
+            }
+        }
+    }
+
+    func testLabelRenderingTruncatesAndMissingLabelsPreserveTheIconLayout() {
+        let base = baseImage()
+        let numbers = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 8)
+        let style = StatusItemSpaceBadgeStyle()
+        let short = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: "Wor")
+        let long = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: "Workplace")
+        XCTAssertEqual(short.size, long.size)
+        XCTAssertEqual(bitmap(short, scale: 2).tiffRepresentation, bitmap(long, scale: 2).tiffRepresentation)
+        let originalImage = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style)
+        let original = bitmap(originalImage, scale: 2)
+        for label in ["", "   "] {
+            let fallback = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: label)
+            XCTAssertEqual(fallback.size, originalImage.size)
+            XCTAssertEqual(original.tiffRepresentation, bitmap(fallback, scale: 2).tiffRepresentation)
         }
     }
 

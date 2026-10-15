@@ -74,6 +74,7 @@
 		9824702F22AFA2E50037B409 /* AccessibilityAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824702E22AFA2E50037B409 /* AccessibilityAuthorization.swift */; };
 		9824703122AFA8470037B409 /* RectangleStatusItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703022AFA8470037B409 /* RectangleStatusItem.swift */; };
 		DA5BADE00000000000000002 /* StatusItemSpaceBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5BADE00000000000000001 /* StatusItemSpaceBadge.swift */; };
+		DA5BADE00000000000000004 /* YabaiSpaceLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5BADE00000000000000003 /* YabaiSpaceLabel.swift */; };
 		9824703722B0F3200037B409 /* WindowAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703622B0F3200037B409 /* WindowAction.swift */; };
 		982470382EFA00010037B409 /* WindowActionCooperativeResize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982470372EFA00010037B409 /* WindowActionCooperativeResize.swift */; };
 		9824703922B0F37C0037B409 /* ShortcutManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824703822B0F37C0037B409 /* ShortcutManager.swift */; };
@@ -324,6 +325,7 @@
 		9824702E22AFA2E50037B409 /* AccessibilityAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuthorization.swift; sourceTree = "<group>"; };
 		9824703022AFA8470037B409 /* RectangleStatusItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RectangleStatusItem.swift; sourceTree = "<group>"; };
 		DA5BADE00000000000000001 /* StatusItemSpaceBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusItemSpaceBadge.swift; sourceTree = "<group>"; };
+		DA5BADE00000000000000003 /* YabaiSpaceLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YabaiSpaceLabel.swift; sourceTree = "<group>"; };
 		9824703622B0F3200037B409 /* WindowAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowAction.swift; sourceTree = "<group>"; };
 		982470372EFA00010037B409 /* WindowActionCooperativeResize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowActionCooperativeResize.swift; sourceTree = "<group>"; };
 		9824703822B0F37C0037B409 /* ShortcutManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutManager.swift; sourceTree = "<group>"; };
@@ -733,6 +735,7 @@
 				985B9BF422B93EEC00A2E8F0 /* ApplicationToggle.swift */,
 				9824703022AFA8470037B409 /* RectangleStatusItem.swift */,
 				DA5BADE00000000000000001 /* StatusItemSpaceBadge.swift */,
+				DA5BADE00000000000000003 /* YabaiSpaceLabel.swift */,
 				9824703622B0F3200037B409 /* WindowAction.swift */,
 				982470372EFA00010037B409 /* WindowActionCooperativeResize.swift */,
 				98A6EDEB2528FFC100F74B10 /* WindowActionCategory.swift */,
@@ -1095,6 +1098,7 @@
 				AF09B1000000000000000001 /* DisplayTransfer.swift in Sources */,
 				9824703122AFA8470037B409 /* RectangleStatusItem.swift in Sources */,
 				DA5BADE00000000000000002 /* StatusItemSpaceBadge.swift in Sources */,
+				DA5BADE00000000000000004 /* YabaiSpaceLabel.swift in Sources */,
 				D04CE31027817ABE00BD47B3 /* BottomRightNinthCalculation.swift in Sources */,
 				98A009B92512538D00CFBF0C /* TopRightSixthCalculation.swift in Sources */,
 				98C275672322E2DA009B9292 /* WindowHistory.swift in Sources */,

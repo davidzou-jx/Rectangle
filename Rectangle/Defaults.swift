@@ -12,6 +12,8 @@ class Defaults {
     static let menuBarSpaceNumberRightInset = DoubleDefault(key: "menuBarSpaceNumberRightInset", defaultValue: 4)
     static let menuBarSpaceNumberLeftInset = DoubleDefault(key: "menuBarSpaceNumberLeftInset", defaultValue: 4)
     static let menuBarSpaceNumberBottomInset = DoubleDefault(key: "menuBarSpaceNumberBottomInset", defaultValue: 0)
+    static let menuBarYabaiLabel = BoolDefault(key: "menuBarYabaiLabel")
+    static let menuBarYabaiLabelDelimiter = StringDefault(key: "menuBarYabaiLabelDelimiter")
     static let alternateDefaultShortcuts = BoolDefault(key: "alternateDefaultShortcuts") // switch to magnet defaults
     static let subsequentExecutionMode = SubsequentExecutionDefault()
     static let tileColumnsMaxWindows = PositiveIntDefault(key: "tileColumnsMaxWindows", defaultValue: 3)
@@ -148,6 +150,8 @@ class Defaults {
         menuBarSpaceNumberRightInset,
         menuBarSpaceNumberLeftInset,
         menuBarSpaceNumberBottomInset,
+        menuBarYabaiLabel,
+        menuBarYabaiLabelDelimiter,
         alternateDefaultShortcuts,
         subsequentExecutionMode,
         tileColumnsMaxWindows,
