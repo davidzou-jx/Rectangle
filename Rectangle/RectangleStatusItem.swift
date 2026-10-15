@@ -36,6 +36,7 @@ class RectangleStatusItem {
         let numbers: StatusItemSpaceNumbers
         let style: StatusItemSpaceBadgeStyle
         let label: String?
+        let labelAlignment: StatusItemSpaceLabelAlignment
     }
     
     private init() {}
@@ -156,10 +157,12 @@ class RectangleStatusItem {
             bottomInset: CGFloat(Defaults.menuBarSpaceNumberBottomInset.value))
         let label = Defaults.menuBarYabaiLabel.enabled
             ? YabaiSpaceLabel.abbreviated(yabaiLabel, delimiter: Defaults.menuBarYabaiLabelDelimiter.value ?? StatusItemSpaceLabelStyle.defaultDelimiter) : nil
-        let configuration = ImageConfiguration(numbers: numbers, style: style, label: label)
+        let labelAlignment = Defaults.menuBarYabaiLabelAlignment.value
+        let configuration = ImageConfiguration(numbers: numbers, style: style, label: label, labelAlignment: labelAlignment)
         guard configuration != imageConfiguration else { return }
         imageConfiguration = configuration
-        button.image = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: label)
+        button.image = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: label,
+                                                labelAlignment: labelAlignment)
         let desktops = [numbers.externalDisplay.map { "External desktop \($0)" },
                         numbers.internalDisplay.map { "Internal desktop \($0)" }].compactMap { $0 }
         let details = desktops + (label.map { ["Space label \($0)"] } ?? [])

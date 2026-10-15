@@ -40,6 +40,13 @@ final class AppSettingsViewModel {
         }
     }
 
+    var menuBarYabaiLabelAlignment: StatusItemSpaceLabelAlignment {
+        didSet {
+            Defaults.menuBarYabaiLabelAlignment.value = menuBarYabaiLabelAlignment
+            RectangleStatusItem.instance.refreshVisibility()
+        }
+    }
+
      var hasPendingUpdate: Bool = false
      var versionString: String = ""
 
@@ -56,6 +63,7 @@ final class AppSettingsViewModel {
         self.hideMenuBarIcon = Defaults.hideMenuBarIcon.enabled
         self.menuBarYabaiLabel = Defaults.menuBarYabaiLabel.enabled
         self.menuBarYabaiLabelDelimiter = Defaults.menuBarYabaiLabelDelimiter.value ?? StatusItemSpaceLabelStyle.defaultDelimiter
+        self.menuBarYabaiLabelAlignment = Defaults.menuBarYabaiLabelAlignment.value
         self.checkForUpdatesAutomatically = AppDelegate.instance.updaterController?.updater.automaticallyChecksForUpdates ?? false
         self.hasPendingUpdate = AppDelegate.instance.hasPendingUpdate
         self.allowAnyShortcut = Defaults.allowAnyShortcut.enabled
@@ -86,6 +94,7 @@ final class AppSettingsViewModel {
         self.hideMenuBarIcon = Defaults.hideMenuBarIcon.enabled
         self.menuBarYabaiLabel = Defaults.menuBarYabaiLabel.enabled
         self.menuBarYabaiLabelDelimiter = Defaults.menuBarYabaiLabelDelimiter.value ?? StatusItemSpaceLabelStyle.defaultDelimiter
+        self.menuBarYabaiLabelAlignment = Defaults.menuBarYabaiLabelAlignment.value
         self.allowAnyShortcut = Defaults.allowAnyShortcut.enabled
     }
 

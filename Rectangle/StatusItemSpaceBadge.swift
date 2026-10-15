@@ -22,6 +22,34 @@ enum StatusItemSpaceLabelStyle {
     static let ascenderDescenderWeight: CGFloat = 0.25
 }
 
+enum StatusItemSpaceLabelAlignment: Int {
+    case ink = 0
+    case letterShapes = 1
+}
+
+/// Experimental alternative to ink centering. Tucks are fractions of the fitted digit's ink width.
+enum StatusItemCornerTuckStyle {
+    static let leftDiagonal: CGFloat = 0.40
+    static let leftRounded: CGFloat = 0.28
+    static let rightDiagonal: CGFloat = 0.45
+    static let rightRounded: CGFloat = 0.35
+    static let flat: CGFloat = 0.15
+    static let protrusionWeight: CGFloat = 0.30
+    static let referenceInset: CGFloat = 4
+
+    static func factor(for character: Character?, isInternal: Bool) -> CGFloat {
+        guard let character else { return flat }
+        if isInternal {
+            if "WVYTFP7rfvwy".contains(character) { return rightDiagonal }
+            if "bopcesODCGQSB".contains(character) { return rightRounded }
+        } else {
+            if "WVYT7vwy".contains(character) { return leftDiagonal }
+            if "JOCGQSoceadgqs".contains(character) { return leftRounded }
+        }
+        return flat
+    }
+}
+
 struct StatusItemSpaceNumbers: Equatable {
     let internalDisplay: Int?
     let externalDisplay: Int?
@@ -33,7 +61,8 @@ struct StatusItemSpaceNumbers: Equatable {
 }
 
 /// At zero horizontal inset, the badge and its outline sit just outside the graphic.
-/// Positive insets move inward; negative insets leave a gap. Values are in points.
+/// Positive insets move inward; negative insets leave a gap. Ink mode uses points;
+/// letter-shape mode scales its automatic tuck relative to the default positive inset.
 struct StatusItemSpaceBadgeStyle: Equatable {
     let fontSize: CGFloat
     let borderWidth: CGFloat
@@ -82,8 +111,9 @@ enum StatusItemSpaceBadge {
     }
 
     static func image(base: NSImage, numbers: StatusItemSpaceNumbers, style: StatusItemSpaceBadgeStyle,
-                      label: String? = nil) -> NSImage {
-        guard let layout = layout(base: base, numbers: numbers, style: style, label: label) else { return base }
+                      label: String? = nil, labelAlignment: StatusItemSpaceLabelAlignment = .ink) -> NSImage {
+        guard let layout = layout(base: base, numbers: numbers, style: style, label: label,
+                                  labelAlignment: labelAlignment) else { return base }
         let image = NSImage(size: layout.size, flipped: false) { _ in
             if layout.label == nil {
                 base.draw(in: layout.graphicFrame, from: .zero, operation: .sourceOver, fraction: 1)
@@ -125,7 +155,7 @@ enum StatusItemSpaceBadge {
     }
 
     static func layout(base: NSImage, numbers: StatusItemSpaceNumbers, style: StatusItemSpaceBadgeStyle,
-                       label: String? = nil) -> Layout? {
+                       label: String? = nil, labelAlignment: StatusItemSpaceLabelAlignment = .ink) -> Layout? {
         guard base.size.width.isFinite, base.size.height.isFinite,
               base.size.width > 0, base.size.height > 0 else { return nil }
         let top = min(max(0, StatusItemIconLayout.topMargin), base.size.height / 4)
@@ -139,7 +169,7 @@ enum StatusItemSpaceBadge {
         if let (line, bounds) = labelDrawing {
             let maxWidth = max(1, StatusItemSpaceLabelStyle.maximumWidth - 2 * StatusItemSpaceLabelStyle.horizontalInset)
             let scale = min(1, maxWidth / bounds.width, contentHeight / bounds.height)
-            let offset = horizontalOpticalOffset(line: line, bounds: bounds, scale: scale)
+            let offset = labelAlignment == .ink ? horizontalOpticalOffset(line: line, bounds: bounds, scale: scale) : 0
             labelLayout = Label(line: line, bounds: bounds, scale: scale, horizontalOffset: offset)
             let clearance = (numbers.internalDisplay ?? 0) > 0 || (numbers.externalDisplay ?? 0) > 0
                 ? StatusItemSpaceLabelStyle.badgeClearance : 0
@@ -153,6 +183,8 @@ enum StatusItemSpaceBadge {
             graphicFrame = CGRect(origin: .zero, size: base.size)
         }
 
+        let usesCornerTucks = labelAlignment == .letterShapes && labelLayout != nil
+        let displayedLabel = label.map { String($0.prefix(max(0, StatusItemSpaceLabelStyle.maxCharacters))) }
         var badges: [Number] = []
         for (value, isInternal, inset) in [(numbers.externalDisplay, false, style.leftInset),
                                           (numbers.internalDisplay, true, style.rightInset)] {
@@ -162,8 +194,17 @@ enum StatusItemSpaceBadge {
                             (contentHeight - 2 * border) / bounds.height)
             let width = bounds.width * scale
             let height = bounds.height * scale
-            // Zero starts outside the graphic, including the halo. Positive values overlap it.
-            let inward = hasBoth ? min(inset, graphicFrame.width / 2) : min(inset, graphicFrame.width)
+            // Zero stays outside the halo in both modes. At the default positive inset, automatic
+            // tucks describe actual ink overlap, so cross the border first; other positive values
+            // scale that tuck. Negative insets still leave a gap measured in points.
+            var proposedInset = inset
+            if usesCornerTucks && inset > 0 {
+                let factor = StatusItemCornerTuckStyle.factor(
+                    for: isInternal ? displayedLabel?.last : displayedLabel?.first, isInternal: isInternal)
+                proposedInset = inset / StatusItemCornerTuckStyle.referenceInset * (border + width * factor)
+            }
+            // Keep opposing outlines apart on very short labels.
+            let inward = hasBoth ? min(proposedInset, graphicFrame.width / 2) : min(proposedInset, graphicFrame.width)
             let x = isInternal ? graphicFrame.maxX + border - inward
                                : graphicFrame.minX - border - width + inward
             let y = max(bottom + border, min(base.size.height - top - border - height,
@@ -183,10 +224,17 @@ enum StatusItemSpaceBadge {
         let width: CGFloat
         let shift: CGFloat
         if labelLayout != nil {
-            // Unequal badges must not pull the label away from the item's optical center.
-            let halfWidth = max(graphicFrame.midX - extent.minX, extent.maxX - graphicFrame.midX)
+            let leftProtrusion = graphicFrame.minX - extent.minX
+            let rightProtrusion = extent.maxX - graphicFrame.maxX
+            let opticalShift = usesCornerTucks
+                ? (leftProtrusion - rightProtrusion) / 2 * StatusItemCornerTuckStyle.protrusionWeight : 0
+            // With a partial optical shift, summing the protrusions can clip the wider side.
+            // Reserve enough room on each side of the shifted word, including transparent outlines.
+            let halfWidth = usesCornerTucks
+                ? graphicFrame.width / 2 + max(leftProtrusion - opticalShift, rightProtrusion + opticalShift)
+                : max(graphicFrame.midX - extent.minX, extent.maxX - graphicFrame.midX)
             width = ceil(2 * (halfWidth + margin))
-            shift = width / 2 - graphicFrame.midX
+            shift = width / 2 - graphicFrame.midX + opticalShift
         } else {
             width = ceil(extent.width + 2 * margin)
             shift = margin - extent.minX + (width - extent.width - 2 * margin) / 2

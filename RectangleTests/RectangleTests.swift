@@ -441,6 +441,140 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
         }
     }
 
+    func testLetterShapeTucksRespondToEachVisibleEndIndependently() throws {
+        let base = baseImage()
+        let numbers = StatusItemSpaceNumbers(internalDisplay: 5, externalDisplay: 8)
+        func overlaps(_ text: String) throws -> (left: CGFloat, right: CGFloat) {
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
+                style: .init(), label: text, labelAlignment: .letterShapes))
+            let frame = try XCTUnwrap(layout.labelFrame)
+            let left = try XCTUnwrap(layout.numbers.first { !$0.isInternal }).frame
+            let right = try XCTUnwrap(layout.numbers.first { $0.isInternal }).frame
+            return ((left.maxX - frame.minX) / left.width, (frame.maxX - right.minX) / right.width)
+        }
+        let leftDiagonal = try overlaps("Wbb"), leftRound = try overlaps("Obb"), leftFlat = try overlaps("Hbb")
+        XCTAssertGreaterThan(leftDiagonal.left, leftRound.left)
+        XCTAssertGreaterThan(leftRound.left, leftFlat.left)
+        XCTAssertEqual(leftDiagonal.right, leftRound.right, accuracy: 0.001)
+        XCTAssertEqual(leftRound.right, leftFlat.right, accuracy: 0.001)
+        let rightDiagonal = try overlaps("abW"), rightRound = try overlaps("abO"), rightFlat = try overlaps("abH")
+        XCTAssertGreaterThan(rightDiagonal.right, rightRound.right)
+        XCTAssertGreaterThan(rightRound.right, rightFlat.right)
+        XCTAssertEqual(rightDiagonal.left, rightRound.left, accuracy: 0.001)
+        XCTAssertEqual(rightRound.left, rightFlat.left, accuracy: 0.001)
+
+        // The heuristic must inspect the displayed prefix's last letter, not the full label's end.
+        let short = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: .init(),
+            label: "Web", labelAlignment: .letterShapes)
+        let long = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: .init(),
+            label: "WebH", labelAlignment: .letterShapes)
+        XCTAssertEqual(bitmap(short, scale: 2).tiffRepresentation, bitmap(long, scale: 2).tiffRepresentation)
+    }
+
+    func testLetterShapeCenteringBalancesTheWordAndAsymmetricOuterBounds() throws {
+        for numbers in [StatusItemSpaceNumbers(internalDisplay: 1, externalDisplay: 88),
+                        .init(internalDisplay: 88, externalDisplay: 1),
+                        .init(internalDisplay: 7), .init(externalDisplay: 7)] {
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers,
+                style: .init(), label: "Web", labelAlignment: .letterShapes))
+            let frame = try XCTUnwrap(layout.labelFrame)
+            let extent = layout.numbers.reduce(frame) { $0.union($1.frame.insetBy(dx: -layout.border, dy: 0)) }
+            let left = frame.minX - extent.minX, right = extent.maxX - frame.maxX
+            let wordOffset = frame.midX - layout.size.width / 2
+            XCTAssertGreaterThan(wordOffset * (left - right), 0)
+            XCTAssertLessThan(abs(wordOffset), abs(left - right) / 2)
+            XCTAssertLessThan(abs(extent.midX - layout.size.width / 2), abs(left - right) / 2)
+            // Weighted centering needs more room than simply summing the two protrusions.
+            XCTAssertGreaterThanOrEqual(extent.minX, StatusItemIconLayout.horizontalMargin - 0.001)
+            XCTAssertLessThanOrEqual(extent.maxX, layout.size.width - StatusItemIconLayout.horizontalMargin + 0.001)
+            XCTAssertLessThan(min(extent.minX, layout.size.width - extent.maxX), StatusItemIconLayout.horizontalMargin + 0.5)
+        }
+    }
+
+    func testLetterShapeInsetsStillStartOutsideTheOutlineAndAllowAGap() throws {
+        for inset: CGFloat in [0, -5] {
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(),
+                numbers: .init(internalDisplay: 5, externalDisplay: 8),
+                style: .init(rightInset: inset, leftInset: inset), label: "Web", labelAlignment: .letterShapes))
+            let frame = try XCTUnwrap(layout.labelFrame)
+            for number in layout.numbers {
+                let gap = number.isInternal ? number.frame.minX - layout.border - frame.maxX
+                                            : frame.minX - number.frame.maxX - layout.border
+                XCTAssertEqual(gap, -inset, accuracy: 0.001)
+            }
+        }
+    }
+
+    func testLetterShapeLayoutSafelyFitsNarrowLabelsWideNumbersAndExtremeInsets() throws {
+        for text in ["I", "W", "Web", "WWW", "研究室", "👩🏽‍💻ab", "iii"] {
+            for numbers in [StatusItemSpaceNumbers(internalDisplay: 1, externalDisplay: 88),
+                            .init(internalDisplay: Int.max, externalDisplay: Int.max),
+                            .init(internalDisplay: 7), .init(externalDisplay: 7), .init()] {
+                for style in [StatusItemSpaceBadgeStyle(),
+                              .init(fontSize: 14, borderWidth: 3, rightInset: 64, leftInset: 64, bottomInset: 64),
+                              .init(fontSize: 6, borderWidth: 0, rightInset: -64, leftInset: -64, bottomInset: -64)] {
+                    let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers,
+                        style: style, label: text, labelAlignment: .letterShapes))
+                    let frame = try XCTUnwrap(layout.labelFrame)
+                    XCTAssertLessThan(layout.size.width, 250)
+                    XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                    XCTAssertLessThanOrEqual(frame.maxX, layout.size.width)
+                    for number in layout.numbers {
+                        XCTAssertGreaterThanOrEqual(number.frame.minX - layout.border, -0.001)
+                        XCTAssertLessThanOrEqual(number.frame.maxX + layout.border, layout.size.width + 0.001)
+                        XCTAssertGreaterThanOrEqual(number.frame.minY - layout.border, -0.001)
+                        XCTAssertLessThanOrEqual(number.frame.maxY + layout.border, layout.contentRect.maxY + 0.001)
+                    }
+                    if let left = layout.numbers.first(where: { !$0.isInternal }),
+                       let right = layout.numbers.first(where: { $0.isInternal }) {
+                        XCTAssertLessThanOrEqual(left.frame.maxX + layout.border, right.frame.minX - layout.border + 0.001)
+                    }
+                }
+            }
+        }
+    }
+
+    func testLetterShapeRenderingKeepsBothDigitsMonochromeAndTopPaddingAtBothScales() throws {
+        for scale in [1, 2] {
+            for text in ["Web", "Job", "I", "研究室"] {
+                let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(),
+                    numbers: .init(internalDisplay: 5, externalDisplay: 8), style: .init(), label: text,
+                    labelAlignment: .letterShapes))
+                let image = StatusItemSpaceBadge.image(base: baseImage(), numbers: .init(internalDisplay: 5, externalDisplay: 8),
+                    style: .init(), label: text, labelAlignment: .letterShapes)
+                let pixels = bitmap(image, scale: scale)
+                XCTAssertTrue(image.isTemplate)
+                var visibleDigits: Set<Bool> = []
+                for y in 0..<pixels.pixelsHigh { for x in 0..<pixels.pixelsWide {
+                    let color = pixels.colorAt(x: x, y: y)!
+                    if y < Int(StatusItemIconLayout.topMargin) * scale {
+                        XCTAssertEqual(color.alphaComponent, 0)
+                    }
+                    if color.alphaComponent > 0.9 {
+                        XCTAssertLessThan(color.redComponent, 0.01)
+                        XCTAssertLessThan(color.greenComponent, 0.01)
+                        XCTAssertLessThan(color.blueComponent, 0.01)
+                        let point = CGPoint(x: (CGFloat(x) + 0.5) / CGFloat(scale),
+                                            y: layout.size.height - (CGFloat(y) + 0.5) / CGFloat(scale))
+                        for number in layout.numbers where number.path.contains(point) { visibleDigits.insert(number.isInternal) }
+                    }
+                }}
+                XCTAssertEqual(visibleDigits, [false, true])
+            }
+        }
+    }
+
+    func testLetterShapesWithoutALabelStillUseTheCurrentRectangleIcon() {
+        let base = baseImage()
+        for label in [nil, "", "   "] as [String?] {
+            let numbers = StatusItemSpaceNumbers(internalDisplay: 5, externalDisplay: 8)
+            let current = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: .init(), label: label)
+            let experiment = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: .init(), label: label,
+                labelAlignment: .letterShapes)
+            XCTAssertEqual(current.size, experiment.size)
+            XCTAssertEqual(bitmap(current, scale: 2).tiffRepresentation, bitmap(experiment, scale: 2).tiffRepresentation)
+        }
+    }
 }
 
 class RectangleTests: XCTestCase {

@@ -84,11 +84,16 @@ The `StatusItemSpaceLabelStyle` constants at the top of [StatusItemSpaceBadge.sw
 
 Labels receive a small horizontal optical correction based on their rendered ink, giving the main letter bodies more weight than ascenders and descenders. This approximates perceived centering for words such as `Web`, whose diagonal `W` can make geometric centering look uneven. The correction is capped at 1.5 points and 5% of the label width. `opticalCenteringStrength` (set to `0` to disable), `maximumOpticalOffset`, and `ascenderDescenderWeight` tune it. Equal space is reserved around the label for the farther badge, so differing digit widths cannot pull it off-center; the total width still follows the layout. Badge anchors include the correction's small padding, preserving no overlap at inset `0`.
 
+**Label alignment** in App Settings keeps **Ink balance (current)** as the default and offers **Letter shapes (experimental)** for comparison. The experiment uses the first and last *displayed* characters to tuck badges further under diagonal or rounded corners than under flat stems. At the default horizontal inset of `4`, left tucks are 40% / 28% / 15% of digit width for diagonal / rounded / flat corners, and right tucks are 45% / 35% / 15%. These are heuristic starting values for the current font. Positive inset values scale the automatic tuck relative to `4`; zero still places the entire outlined badge outside the label, and negative values still add a gap in points. Short labels limit inward placement to keep the two outlines apart.
+
+`StatusItemCornerTuckStyle` holds the character groups, tuck factors, reference inset, and `protrusionWeight` (`0.30`). The experiment shifts the word by 30% of the difference between word-only and outer-bounds centering, accounting for both digits and their outlines. The canvas reserves enough space on each side of that shifted word, rather than simply summing protrusions, so unequal or missing badges cannot be clipped. It does not apply the current ink correction as well. Spaces without a label use the existing Rectangle icon layout in either mode.
+
 Yabai must be installed and running. Rectangle reads labels in the background; if the query fails, times out, or returns an empty label/prefix, it uses the window icon. These settings apply immediately in App Settings and are included in configuration exports. They can also be set through Terminal followed by a restart:
 
 ```bash
 defaults write com.knollsoft.Rectangle menuBarYabaiLabel -bool true
 defaults write com.knollsoft.Rectangle menuBarYabaiLabelDelimiter -string '-'
+defaults write com.knollsoft.Rectangle menuBarYabaiLabelAlignment -int 1 # 0: current ink balance, 1: experimental letter shapes
 ```
 
 ## Change how Move to Space switches Spaces

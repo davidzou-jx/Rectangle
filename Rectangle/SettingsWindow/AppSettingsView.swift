@@ -46,6 +46,10 @@ struct AppSettingsView: View {
                 Toggle("Use Yabai Space label as menu bar icon", isOn: $viewModel.menuBarYabaiLabel)
                 if viewModel.menuBarYabaiLabel {
                     TextField("Label delimiter", text: $viewModel.menuBarYabaiLabelDelimiter)
+                    Picker("Label alignment", selection: $viewModel.menuBarYabaiLabelAlignment) {
+                        Text("Ink balance (current)").tag(StatusItemSpaceLabelAlignment.ink)
+                        Text("Letter shapes (experimental)").tag(StatusItemSpaceLabelAlignment.letterShapes)
+                    }
                     Text("Replaces the Rectangle icon with up to \(StatusItemSpaceLabelStyle.maxCharacters) characters before the delimiter, with Space numbers overlaid at the bottom corners. Unlabeled Spaces show the Rectangle icon. Leave the delimiter empty to use the start of the whole label.")
                         .font(.caption)
                         .foregroundColor(.secondary)
