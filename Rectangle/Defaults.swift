@@ -6,6 +6,12 @@ class Defaults {
     static let launchOnLogin = BoolDefault(key: "launchOnLogin")
     static let disabledApps = JSONDefault<Set<String>>(key: "disabledApps")
     static let hideMenuBarIcon = BoolDefault(key: "hideMenubarIcon")
+    static let menuBarSpaceNumber = OptionalBoolDefault(key: "menuBarSpaceNumber")
+    static let menuBarSpaceNumberFontSize = DoubleDefault(key: "menuBarSpaceNumberFontSize", defaultValue: 9)
+    static let menuBarSpaceNumberBorderWidth = DoubleDefault(key: "menuBarSpaceNumberBorderWidth", defaultValue: 1.5)
+    static let menuBarSpaceNumberRightInset = DoubleDefault(key: "menuBarSpaceNumberRightInset", defaultValue: 4)
+    static let menuBarSpaceNumberLeftInset = DoubleDefault(key: "menuBarSpaceNumberLeftInset", defaultValue: 4)
+    static let menuBarSpaceNumberBottomInset = DoubleDefault(key: "menuBarSpaceNumberBottomInset", defaultValue: 0)
     static let alternateDefaultShortcuts = BoolDefault(key: "alternateDefaultShortcuts") // switch to magnet defaults
     static let subsequentExecutionMode = SubsequentExecutionDefault()
     static let tileColumnsMaxWindows = PositiveIntDefault(key: "tileColumnsMaxWindows", defaultValue: 3)
@@ -136,6 +142,12 @@ class Defaults {
         launchOnLogin,
         disabledApps,
         hideMenuBarIcon,
+        menuBarSpaceNumber,
+        menuBarSpaceNumberFontSize,
+        menuBarSpaceNumberBorderWidth,
+        menuBarSpaceNumberRightInset,
+        menuBarSpaceNumberLeftInset,
+        menuBarSpaceNumberBottomInset,
         alternateDefaultShortcuts,
         subsequentExecutionMode,
         tileColumnsMaxWindows,

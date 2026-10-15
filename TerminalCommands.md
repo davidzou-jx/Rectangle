@@ -5,6 +5,7 @@ The preferences window is purposefully slim, but there's a lot that can be modif
 ## Contents
 
 - [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Menu bar desktop number](#menu-bar-desktop-number)
 - [Change how Move to Space switches Spaces](#change-how-move-to-space-switches-spaces)
 - [Adjust Behavior on Repeated Commands](#adjust-behavior-on-repeated-commands)
 - [Cycle thirds on repeated Center Half commands](#cycle-thirds-on-repeated-center-half-commands)
@@ -52,6 +53,29 @@ If you wish to change the default shortcuts after first launch click "Restore De
 
 ```bash
 defaults write com.knollsoft.Rectangle alternateDefaultShortcuts -bool true
+```
+
+## Menu bar desktop number
+
+The menu bar icon shows the internal display's current desktop number in its bottom-right corner and the external display's number in its bottom-left corner. The positions stay fixed when focus moves between displays. This supports one internal display and one external display; a disconnected display's number is omitted. Numbers follow Mission Control's desktop order across displays, matching Rectangle's numbered Space shortcuts. A display's number is also omitted when it shows a full-screen Space or its Space information is unavailable.
+
+The badge uses the menu bar's monochrome tint, with a transparent outline separating the digits from the window icon. Customize its size, outline, and position in points (the values below are the defaults), then restart Rectangle:
+
+```bash
+defaults write com.knollsoft.Rectangle menuBarSpaceNumberFontSize -float 9
+defaults write com.knollsoft.Rectangle menuBarSpaceNumberBorderWidth -float 1.5
+defaults write com.knollsoft.Rectangle menuBarSpaceNumberRightInset -float 4
+defaults write com.knollsoft.Rectangle menuBarSpaceNumberLeftInset -float 4
+defaults write com.knollsoft.Rectangle menuBarSpaceNumberBottomInset -float 0
+```
+
+At horizontal inset `0`, each number and its transparent outline sit just outside the window graphic's canvas, with no overlap. Positive insets move the number inward by that many points; negative values add a gap. The default `4` gives roughly half-digit overlap at the default font size and border width. The menu item's width grows or shrinks to fit the window graphic and both badges, including multi-digit numbers and outward offsets. The bottom inset moves both numbers upward from their lowest outlined position; its default is `0` to use the space near the bottom of the menu bar. Font size is limited to 6–14 points and outline width to 0–3 points; zero removes the outline. Insets are bounded to ±64 points to keep extreme values safe.
+
+To hide both numbers, or enable them again:
+
+```bash
+defaults write com.knollsoft.Rectangle menuBarSpaceNumber -int 2 # hide
+defaults write com.knollsoft.Rectangle menuBarSpaceNumber -int 1 # show (default)
 ```
 
 ## Change how Move to Space switches Spaces

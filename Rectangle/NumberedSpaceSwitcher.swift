@@ -13,6 +13,22 @@ struct ManagedDisplaySpaceSwitch: Equatable {
 }
 
 extension ManagedSpaceTopology {
+    /// The inverse of desktop(number:in:), using the same numbering as numbered shortcuts.
+    /// Native full-screen Spaces have no desktop number.
+    static func currentDesktopNumber(on displayIdentifier: String, in displays: [[String: Any]]) -> Int? {
+        guard let currentID = currentSpace(for: displayIdentifier, in: displays) else { return nil }
+        var ordinal = 0
+        for display in displays {
+            guard let spaces = display["Spaces"] as? [[String: Any]] else { return nil }
+            for space in spaces where (space["type"] as? NSNumber)?.intValue == 0 {
+                ordinal += 1
+                if (display["Display Identifier"] as? String) == displayIdentifier,
+                   (space["id64"] as? NSNumber)?.uint64Value == currentID { return ordinal }
+            }
+        }
+        return nil
+    }
+
     /// Desktop numbers span displays, but exclude native full-screen Spaces.
     /// Resolve a fresh ID each time: Mission Control can reorder/remove desktops.
     static func desktop(number: Int, in displays: [[String: Any]]) -> ManagedDisplaySpaceSwitch? {

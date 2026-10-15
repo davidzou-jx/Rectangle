@@ -5,6 +5,252 @@ import MASShortcut
 import XCTest
 @testable import Rectangle
 
+final class StatusItemSpaceBadgeTests: XCTestCase {
+    private let displays: [[String: Any]] = [
+        ["Display Identifier": "A", "Current Space": ["id64": 57],
+         "Spaces": [["id64": 10, "type": 0], ["id64": 99, "type": 4], ["id64": 57, "type": 0]]],
+        ["Display Identifier": "B", "Current Space": ["id64": 901],
+         "Spaces": [["id64": 900, "type": 0], ["id64": 901, "type": 0]]]
+    ]
+
+    func testBadgeNumbersMatchNumberedShortcutsAcrossDisplays() {
+        for identifier in ["A", "B"] {
+            let number = ManagedSpaceTopology.currentDesktopNumber(on: identifier, in: displays)
+            XCTAssertEqual(number, identifier == "A" ? 2 : 4)
+            let target = number.flatMap { ManagedSpaceTopology.desktop(number: $0, in: displays) }
+            XCTAssertEqual(target?.displayIdentifier, identifier)
+            XCTAssertEqual(target?.destinationID, ManagedSpaceTopology.currentSpace(for: identifier, in: displays))
+        }
+    }
+
+    func testDesktopReorderingRefreshesTheNumberWithoutChangingTheSpaceID() {
+        var reordered = displays
+        reordered[0]["Spaces"] = [["id64": 57, "type": 0], ["id64": 10, "type": 0], ["id64": 99, "type": 4]]
+        XCTAssertEqual(ManagedSpaceTopology.currentDesktopNumber(on: "A", in: reordered), 1)
+    }
+
+    func testFullscreenUnknownDisplayAndIncompleteTopologyHaveNoNumber() {
+        var fullscreen = displays
+        fullscreen[0]["Current Space"] = ["id64": 99]
+        XCTAssertNil(ManagedSpaceTopology.currentDesktopNumber(on: "A", in: fullscreen))
+        XCTAssertNil(ManagedSpaceTopology.currentDesktopNumber(on: "missing", in: displays))
+        var malformed = displays
+        malformed[0]["Spaces"] = [["id64": 57, "type": 0], ["type": 0]]
+        // A malformed earlier display must not silently renumber the later display.
+        XCTAssertNil(ManagedSpaceTopology.currentDesktopNumber(on: "B", in: malformed))
+        XCTAssertNil(ManagedSpaceTopology.currentDesktopNumber(on: "A", in: []))
+    }
+
+    func testInternalAndExternalNumbersFollowHardwareRolesInsteadOfScreenOrder() {
+        let screens = [(identifier: "B", isBuiltIn: false), (identifier: "A", isBuiltIn: true)]
+        let expected = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 4)
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: screens, in: displays), expected)
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: Array(screens.reversed()), in: displays), expected)
+
+        var changed = displays
+        changed[1]["Current Space"] = ["id64": 900]
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: screens, in: changed),
+                       StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 3))
+        changed[0]["Current Space"] = ["id64": 10]
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: screens, in: changed),
+                       StatusItemSpaceNumbers(internalDisplay: 1, externalDisplay: 3))
+    }
+
+    func testDisconnectAndFullscreenOnlyRemoveTheAffectedDisplaysNumber() {
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: [("A", true)], in: displays),
+                       StatusItemSpaceNumbers(internalDisplay: 2))
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: [("B", false)], in: displays),
+                       StatusItemSpaceNumbers(externalDisplay: 4))
+        var fullscreen = displays
+        fullscreen[0]["Current Space"] = ["id64": 99]
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: [("A", true), ("B", false)], in: fullscreen),
+                       StatusItemSpaceNumbers(externalDisplay: 4))
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: [], in: displays), StatusItemSpaceNumbers())
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: [("unknown", true)], in: []), StatusItemSpaceNumbers())
+    }
+
+    func testAdditionalDisplaysAreSafelyIgnoredAfterTheFirstOfEachKind() {
+        let screens = [("A", true), ("B", false), ("unused", false), ("unusedInternal", true)]
+        XCTAssertEqual(StatusItemSpaceNumbers.current(for: screens, in: displays),
+                       StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 4))
+    }
+
+    private func baseImage() -> NSImage {
+        NSImage(size: NSSize(width: 22, height: 22), flipped: false) { rect in
+            NSColor.black.setFill()
+            rect.fill()
+            return true
+        }
+    }
+
+    private func bitmap(_ image: NSImage, scale: Int) -> NSBitmapImageRep {
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                      pixelsWide: Int(ceil(image.size.width * CGFloat(scale))),
+                                      pixelsHigh: Int(ceil(image.size.height * CGFloat(scale))),
+                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        let context = NSGraphicsContext(bitmapImageRep: bitmap)!
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+        image.draw(in: NSRect(origin: .zero, size: image.size), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap
+    }
+
+    func testOutlineClearsPixelsInsteadOfPaintingAContrastingColorAtBothScales() throws {
+        for scale in [1, 2] {
+            let base = baseImage()
+            let numbers = StatusItemSpaceNumbers(internalDisplay: 8)
+            let style = StatusItemSpaceBadgeStyle()
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: style))
+            let pixels = bitmap(StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style), scale: scale)
+            var clearedPixels = 0
+            for y in 0..<pixels.pixelsHigh {
+                for x in 0..<pixels.pixelsWide {
+                    let pointX = (CGFloat(x) + 0.5) / CGFloat(scale)
+                    let color = pixels.colorAt(x: x, y: y)!
+                    if pointX > layout.graphicFrame.minX + 1, pointX < layout.graphicFrame.maxX - 1,
+                       color.alphaComponent < 0.1 {
+                        clearedPixels += 1
+                        XCTAssertGreaterThan(pointX, layout.graphicFrame.midX)
+                    }
+                    if color.alphaComponent > 0.1 {
+                        XCTAssertLessThan(color.redComponent, 0.01)
+                        XCTAssertLessThan(color.greenComponent, 0.01)
+                        XCTAssertLessThan(color.blueComponent, 0.01)
+                    }
+                }
+            }
+            XCTAssertGreaterThan(clearedPixels, 0, "The outline must clear the opaque graphic underneath")
+        }
+    }
+
+    func testBothCornersRetainTheirDigitsAndTransparentOutlinesAtBothScales() throws {
+        let style = StatusItemSpaceBadgeStyle(borderWidth: 1.5)
+        for scale in [1, 2] {
+            let base = baseImage()
+            let numbers = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 8)
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: style))
+            let empty = NSImage(size: base.size)
+            let digits = bitmap(StatusItemSpaceBadge.image(base: empty, numbers: numbers, style: style), scale: scale)
+            let outlined = bitmap(StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style), scale: scale)
+            for number in layout.numbers {
+                var visible = 0, cleared = 0
+                for y in 0..<digits.pixelsHigh {
+                    for x in 0..<digits.pixelsWide {
+                        let point = CGPoint(x: (CGFloat(x) + 0.5) / CGFloat(scale),
+                                            y: base.size.height - (CGFloat(y) + 0.5) / CGFloat(scale))
+                        if number.frame.contains(point), digits.colorAt(x: x, y: y)!.alphaComponent > 0.9 { visible += 1 }
+                        if layout.graphicFrame.contains(point), number.frame.insetBy(dx: -style.borderWidth, dy: -style.borderWidth).contains(point),
+                           outlined.colorAt(x: x, y: y)!.alphaComponent < 0.1 { cleared += 1 }
+                    }
+                }
+                XCTAssertGreaterThan(visible, 0)
+                XCTAssertGreaterThan(cleared, 0)
+            }
+        }
+    }
+
+    func testTwoMultiDigitNumbersRemainVisibleWithCustomizedInsets() throws {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        let numbers = StatusItemSpaceNumbers(internalDisplay: 12, externalDisplay: 34)
+        for style in [StatusItemSpaceBadgeStyle(),
+                      StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 1.5,
+                                               rightInset: 100, leftInset: -100, bottomInset: -100)] {
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: style))
+            let image = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style)
+            XCTAssertEqual(image.size.height, base.size.height)
+            let pixels = bitmap(image, scale: 2)
+            for number in layout.numbers {
+                XCTAssertGreaterThanOrEqual(number.frame.minX - style.borderWidth, 0)
+                XCTAssertLessThanOrEqual(number.frame.maxX + style.borderWidth, image.size.width)
+                XCTAssertTrue((0..<pixels.pixelsHigh).contains { y in
+                    (0..<pixels.pixelsWide).contains { x in
+                        let point = CGPoint(x: (CGFloat(x) + 0.5) / 2, y: base.size.height - (CGFloat(y) + 0.5) / 2)
+                        return number.frame.contains(point) && pixels.colorAt(x: x, y: y)!.alphaComponent > 0.1
+                    }
+                })
+            }
+        }
+    }
+
+    func testWideNumbersAndExtremeStylesFitADynamicCanvas() {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        for number in [1, 12, 123, Int.max] {
+            for style in [StatusItemSpaceBadgeStyle(),
+                          StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, rightInset: 100, bottomInset: -100),
+                          StatusItemSpaceBadgeStyle(fontSize: .nan, borderWidth: .infinity)] {
+                let image = StatusItemSpaceBadge.image(base: base, numbers: .init(internalDisplay: number), style: style)
+                XCTAssertEqual(image.size.height, base.size.height)
+                XCTAssertLessThan(image.size.width, 200)
+                XCTAssertTrue(image.isTemplate)
+                let pixels = bitmap(image, scale: 2)
+                XCTAssertTrue((0..<pixels.pixelsHigh).contains { y in
+                    (0..<pixels.pixelsWide).contains { pixels.colorAt(x: $0, y: y)!.alphaComponent > 0.1 }
+                }, "The digits should remain visible after fitting and clamping")
+            }
+        }
+        XCTAssertTrue(StatusItemSpaceBadge.image(base: base, numbers: .init(), style: .init()) === base)
+        XCTAssertTrue(StatusItemSpaceBadge.image(base: base, numbers: .init(internalDisplay: 0, externalDisplay: -1), style: .init()) === base)
+    }
+
+    func testRenderedIconsKeepVerticalPaddingWithCustomizedBadges() throws {
+        let base = try XCTUnwrap(NSImage(named: "StatusTemplate"))
+        for scale in [1, 2] {
+            for style in [StatusItemSpaceBadgeStyle(),
+                          StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: -100),
+                          StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: 100)] {
+                let pixels = bitmap(StatusItemSpaceBadge.image(base: base,
+                    numbers: .init(internalDisplay: 2, externalDisplay: 8), style: style), scale: scale)
+                let top = Int(StatusItemIconLayout.topMargin) * scale
+                let bottom = Int(StatusItemIconLayout.bottomMargin) * scale
+                for y in Array(0..<top) + Array((pixels.pixelsHigh - bottom)..<pixels.pixelsHigh) {
+                    for x in 0..<pixels.pixelsWide {
+                        XCTAssertEqual(pixels.colorAt(x: x, y: y)!.alphaComponent, 0,
+                                       "The top and bottom padding must stay transparent")
+                    }
+                }
+            }
+        }
+    }
+
+    func testZeroInsetsHaveNoOverlapAndWidthTracksOutwardPlacement() throws {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        let numbers = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 8)
+        let zero = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
+            style: .init(rightInset: 0, leftInset: 0)))
+        for number in zero.numbers {
+            if number.isInternal {
+                XCTAssertEqual(number.frame.minX - zero.border, zero.graphicFrame.maxX, accuracy: 0.001)
+            } else {
+                XCTAssertEqual(number.frame.maxX + zero.border, zero.graphicFrame.minX, accuracy: 0.001)
+            }
+        }
+        let half = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: .init()))
+        let gap = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
+            style: .init(rightInset: -5, leftInset: -5)))
+        XCTAssertEqual(zero.size.width - half.size.width, 8, accuracy: 0.001)
+        XCTAssertEqual(gap.size.width - zero.size.width, 10, accuracy: 0.001)
+        for number in half.numbers {
+            let overlap = number.frame.intersection(half.graphicFrame).width / number.frame.width
+            XCTAssertGreaterThan(overlap, 0.35)
+            XCTAssertLessThan(overlap, 0.65)
+        }
+    }
+
+    func testDefaultBadgesUseTheExtraSpaceAtTheBottom() throws {
+        let base = NSImage(size: NSSize(width: 22, height: 22))
+        let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base,
+            numbers: .init(internalDisplay: 2, externalDisplay: 8), style: .init()))
+        for number in layout.numbers {
+            XCTAssertLessThanOrEqual(number.frame.minY, 2)
+            XCTAssertGreaterThanOrEqual(number.frame.minY - layout.border, 0)
+        }
+    }
+
+}
+
 class RectangleTests: XCTestCase {
 
     override func setUp() {
