@@ -1,6 +1,7 @@
 /// RectangleTests.swift
 
 import Carbon.HIToolbox
+import CoreText
 import MASShortcut
 import XCTest
 @testable import Rectangle
@@ -305,7 +306,7 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
     func testRenderedIconsKeepVerticalPaddingWithLabelsAndCustomizedBadges() throws {
         let base = try XCTUnwrap(NSImage(named: "StatusTemplate"))
         for scale in [1, 2] {
-            for label in [nil, "Web", "gjp", "研究室"] as [String?] {
+            for label in [nil, "Web", "eee", "gjp", "Éee", "研究室", "👩🏽‍💻We"] as [String?] {
                 for style in [StatusItemSpaceBadgeStyle(),
                               StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: -100),
                               StatusItemSpaceBadgeStyle(fontSize: 14, borderWidth: 3, bottomInset: 100)] {
@@ -328,7 +329,7 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
         let base = NSImage(size: NSSize(width: 22, height: 22))
         let numbers = StatusItemSpaceNumbers(internalDisplay: 2, externalDisplay: 8)
         let zero = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
-            style: .init(rightInset: 0, leftInset: 0), label: "Web"))
+            style: .init(rightInset: 0, leftInset: 0), label: "Hbb"))
         for number in zero.numbers {
             if number.isInternal {
                 XCTAssertEqual(number.frame.minX - zero.border, zero.graphicFrame.maxX, accuracy: 0.001)
@@ -336,9 +337,9 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
                 XCTAssertEqual(number.frame.maxX + zero.border, zero.graphicFrame.minX, accuracy: 0.001)
             }
         }
-        let half = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: .init(), label: "Web"))
+        let half = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: .init(), label: "Hbb"))
         let gap = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
-            style: .init(rightInset: -5, leftInset: -5), label: "Web"))
+            style: .init(rightInset: -5, leftInset: -5), label: "Hbb"))
         XCTAssertEqual(zero.size.width - half.size.width, 8, accuracy: 0.001)
         XCTAssertEqual(gap.size.width - zero.size.width, 10, accuracy: 0.001)
         for number in half.numbers {
@@ -438,6 +439,123 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
             let fallback = StatusItemSpaceBadge.image(base: base, numbers: numbers, style: style, label: label)
             XCTAssertEqual(fallback.size, originalImage.size)
             XCTAssertEqual(original.tiffRepresentation, bitmap(fallback, scale: 2).tiffRepresentation)
+        }
+    }
+
+    func testLabelsShareTheBaselineAndVerticalScaleRegardlessOfTextOrBadges() throws {
+        var referenceBaseline: CGFloat?, referenceScale: CGFloat?
+        for alignment in [StatusItemSpaceLabelAlignment.ink, .letterShapes] {
+            for text in ["eee", "Wee", "gee", "Éee", "WWW", "研究室", "👩🏽‍💻We"] {
+                for numbers in [StatusItemSpaceNumbers(), .init(internalDisplay: 5, externalDisplay: 8),
+                                .init(internalDisplay: 5), .init(externalDisplay: 8)] {
+                    let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers,
+                        style: .init(), label: text, labelAlignment: alignment))
+                    let label = try XCTUnwrap(layout.label), frame = try XCTUnwrap(layout.labelFrame)
+                    let baseline = frame.minY - label.bounds.minY * label.scale
+                    if referenceBaseline == nil { referenceBaseline = baseline; referenceScale = label.scale }
+                    XCTAssertEqual(baseline, try XCTUnwrap(referenceBaseline), accuracy: 0.001, text)
+                    XCTAssertEqual(label.scale, try XCTUnwrap(referenceScale), accuracy: 0.001, text)
+                    XCTAssertLessThanOrEqual(label.horizontalScale, label.scale)
+                    XCTAssertGreaterThanOrEqual(frame.minY, layout.contentRect.minY - 0.001)
+                    XCTAssertLessThanOrEqual(frame.maxY, layout.contentRect.maxY + 0.001)
+                    if text == "WWW" || text == "👩🏽‍💻We" {
+                        XCTAssertLessThan(label.horizontalScale, label.scale, "Wide labels should fit without shrinking letter height")
+                    }
+                }
+            }
+        }
+    }
+
+    func testRenderedEStaysAtTheSameHeightWithAscendersDescendersAndWidthFitting() throws {
+        for scale in [1, 2] {
+            var referenceRows: Set<Int>?
+            for text in ["eee", "Wee", "Vee", "gee", "Éee", "👩🏽‍💻We"] {
+                let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: .init(), style: .init(), label: text))
+                let label = try XCTUnwrap(layout.label), frame = try XCTUnwrap(layout.labelFrame)
+                let start = CTLineGetOffsetForStringIndex(label.line, text.utf16.count - 1, nil)
+                let end = CTLineGetOffsetForStringIndex(label.line, text.utf16.count, nil)
+                let minX = frame.minX + (start - label.bounds.minX) * label.horizontalScale
+                let maxX = frame.minX + (end - label.bounds.minX) * label.horizontalScale
+                let pixels = bitmap(StatusItemSpaceBadge.image(base: baseImage(), numbers: .init(), style: .init(), label: text), scale: scale)
+                var rows: Set<Int> = []
+                for y in 0..<pixels.pixelsHigh {
+                    var coverage: CGFloat = 0
+                    for x in 0..<pixels.pixelsWide {
+                        let pointX = (CGFloat(x) + 0.5) / CGFloat(scale)
+                        if pointX >= minX, pointX < maxX { coverage += pixels.colorAt(x: x, y: y)!.alphaComponent }
+                    }
+                    // Ignore weak antialias fringes and the preceding glyph's small overhang.
+                    if coverage / (CGFloat(scale) * label.horizontalScale) > 0.5 { rows.insert(y) }
+                }
+                XCTAssertFalse(rows.isEmpty)
+                if referenceRows == nil { referenceRows = rows }
+                XCTAssertEqual(rows, referenceRows, "The final e must retain its rendered vertical position: \(text) at \(scale)x")
+            }
+        }
+    }
+
+    func testInkAlignmentAddsStrongerTucksOnlyAtOpenCornersAndKeepsItsInkCorrection() throws {
+        let numbers = StatusItemSpaceNumbers(internalDisplay: 5, externalDisplay: 8)
+        func insets(_ text: String) throws -> (left: CGFloat, right: CGFloat) {
+            let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers, style: .init(), label: text))
+            let left = try XCTUnwrap(layout.numbers.first { !$0.isInternal }).frame
+            let right = try XCTUnwrap(layout.numbers.first { $0.isInternal }).frame
+            return (left.maxX + layout.border - layout.graphicFrame.minX,
+                    layout.graphicFrame.maxX + layout.border - right.minX)
+        }
+        let flat = try insets("HeH")
+        XCTAssertEqual(flat.left, 4, accuracy: 0.001)
+        XCTAssertEqual(flat.right, 4, accuracy: 0.001)
+        for letter in "WVYT7vwy" {
+            let tuck = try insets("\(letter)ee")
+            XCTAssertGreaterThan(tuck.left, flat.left + 1)
+            XCTAssertEqual(tuck.right, flat.right, accuracy: 0.001)
+        }
+        for letter in "WVYTFP7rfvwy" {
+            let tuck = try insets("ee\(letter)")
+            XCTAssertGreaterThan(tuck.right, flat.right + 1)
+            XCTAssertEqual(tuck.left, flat.left, accuracy: 0.001)
+        }
+        let web = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers, style: .init(), label: "Web"))
+        XCTAssertLessThan(try XCTUnwrap(web.label).horizontalOffset, -0.1)
+        XCTAssertEqual(web.graphicFrame.midX, web.size.width / 2, accuracy: 0.001)
+    }
+
+    func testInkOpenCornersStillRespectZeroAndNegativeInsetSeparation() throws {
+        for text in ["WeW", "VeV", "YeY", "TeT", "I", "yey"] {
+            for inset: CGFloat in [0, -5] {
+                let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(),
+                    numbers: .init(internalDisplay: 5, externalDisplay: 8),
+                    style: .init(rightInset: inset, leftInset: inset), label: text))
+                let frame = try XCTUnwrap(layout.labelFrame)
+                for number in layout.numbers {
+                    let gap = number.isInternal ? number.frame.minX - layout.border - layout.graphicFrame.maxX
+                                                : layout.graphicFrame.minX - number.frame.maxX - layout.border
+                    XCTAssertEqual(gap, -inset, accuracy: 0.001)
+                    XCTAssertFalse(number.frame.insetBy(dx: -layout.border, dy: 0).intersects(frame))
+                }
+            }
+        }
+    }
+
+    func testInkOpenCornerTucksKeepNarrowLabelsAndWideNumbersInsideTheCanvas() throws {
+        for text in ["W", "V", "Y", "T", "WWW", "WeW", "I"] {
+            for numbers in [StatusItemSpaceNumbers(internalDisplay: 5, externalDisplay: 8),
+                            .init(internalDisplay: Int.max, externalDisplay: Int.max), .init(internalDisplay: 88)] {
+                for style in [StatusItemSpaceBadgeStyle(),
+                              .init(fontSize: 14, borderWidth: 3, rightInset: 64, leftInset: 64),
+                              .init(fontSize: 6, borderWidth: 0, rightInset: -64, leftInset: -64)] {
+                    let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers, style: style, label: text))
+                    for number in layout.numbers {
+                        XCTAssertGreaterThanOrEqual(number.frame.minX - layout.border, -0.001)
+                        XCTAssertLessThanOrEqual(number.frame.maxX + layout.border, layout.size.width + 0.001)
+                    }
+                    if let left = layout.numbers.first(where: { !$0.isInternal }),
+                       let right = layout.numbers.first(where: { $0.isInternal }) {
+                        XCTAssertLessThanOrEqual(left.frame.maxX + layout.border, right.frame.minX - layout.border + 0.001)
+                    }
+                }
+            }
         }
     }
 

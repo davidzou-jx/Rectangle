@@ -16,10 +16,12 @@ enum StatusItemSpaceLabelStyle {
     static let maximumWidth: CGFloat = 36
     static let defaultDelimiter = "-"
     static let horizontalInset: CGFloat = 1
-    static let badgeClearance: CGFloat = 2
+    static let baselineOffset: CGFloat = 2
     static let opticalCenteringStrength: CGFloat = 1
     static let maximumOpticalOffset: CGFloat = 1.5
     static let ascenderDescenderWeight: CGFloat = 0.25
+    static let leftOpenCornerTuck: CGFloat = 0.35
+    static let rightOpenCornerTuck: CGFloat = 0.40
 }
 
 enum StatusItemSpaceLabelAlignment: Int {
@@ -37,13 +39,19 @@ enum StatusItemCornerTuckStyle {
     static let protrusionWeight: CGFloat = 0.30
     static let referenceInset: CGFloat = 4
 
+    static func hasOpenCorner(_ character: Character?, isInternal: Bool) -> Bool {
+        guard let character else { return false }
+        return (isInternal ? "WVYTFP7rfvwy" : "WVYT7vwy").contains(character)
+    }
+
     static func factor(for character: Character?, isInternal: Bool) -> CGFloat {
         guard let character else { return flat }
+        if hasOpenCorner(character, isInternal: isInternal) {
+            return isInternal ? rightDiagonal : leftDiagonal
+        }
         if isInternal {
-            if "WVYTFP7rfvwy".contains(character) { return rightDiagonal }
             if "bopcesODCGQSB".contains(character) { return rightRounded }
         } else {
-            if "WVYT7vwy".contains(character) { return leftDiagonal }
             if "JOCGQSoceadgqs".contains(character) { return leftRounded }
         }
         return flat
@@ -61,8 +69,8 @@ struct StatusItemSpaceNumbers: Equatable {
 }
 
 /// At zero horizontal inset, the badge and its outline sit just outside the graphic.
-/// Positive insets move inward; negative insets leave a gap. Ink mode uses points;
-/// letter-shape mode scales its automatic tuck relative to the default positive inset.
+/// Positive insets move inward; negative insets leave a gap. Ink mode adds a scaled
+/// open-corner tuck to the point inset; letter-shape mode scales its automatic tuck.
 struct StatusItemSpaceBadgeStyle: Equatable {
     let fontSize: CGFloat
     let borderWidth: CGFloat
@@ -84,7 +92,9 @@ enum StatusItemSpaceBadge {
     struct Label {
         let line: CTLine
         let bounds: CGRect
+        /// Shared vertical font scale; width fitting leaves letter heights unchanged.
         let scale: CGFloat
+        let horizontalScale: CGFloat
         let horizontalOffset: CGFloat
     }
 
@@ -104,7 +114,7 @@ enum StatusItemSpaceBadge {
 
         var labelFrame: CGRect? {
             guard let label else { return nil }
-            let width = label.bounds.width * label.scale
+            let width = label.bounds.width * label.horizontalScale
             return CGRect(x: graphicFrame.midX - width / 2 + label.horizontalOffset,
                           y: graphicFrame.minY, width: width, height: graphicFrame.height)
         }
@@ -126,7 +136,7 @@ enum StatusItemSpaceBadge {
             if let label = layout.label, let frame = layout.labelFrame {
                 context.saveGState()
                 context.translateBy(x: frame.minX, y: frame.minY)
-                context.scaleBy(x: label.scale, y: label.scale)
+                context.scaleBy(x: label.horizontalScale, y: label.scale)
                 context.textMatrix = .identity
                 context.textPosition = CGPoint(x: -label.bounds.minX, y: -label.bounds.minY)
                 CTLineDraw(label.line, context)
@@ -167,16 +177,22 @@ enum StatusItemSpaceBadge {
         let labelLayout: Label?
         var graphicFrame: CGRect
         if let (line, bounds) = labelDrawing {
+            let font = NSFont.systemFont(ofSize: StatusItemSpaceLabelStyle.fontSize, weight: .bold)
+            // Include room for common fallback glyphs (emoji extend beyond the system font's metrics).
+            let ascent = max(font.ascender, font.pointSize)
+            let descent = max(-font.descender, font.pointSize / 4)
+            let scale = min(1, contentHeight / (ascent + descent))
             let maxWidth = max(1, StatusItemSpaceLabelStyle.maximumWidth - 2 * StatusItemSpaceLabelStyle.horizontalInset)
-            let scale = min(1, maxWidth / bounds.width, contentHeight / bounds.height)
-            let offset = labelAlignment == .ink ? horizontalOpticalOffset(line: line, bounds: bounds, scale: scale) : 0
-            labelLayout = Label(line: line, bounds: bounds, scale: scale, horizontalOffset: offset)
-            let clearance = (numbers.internalDisplay ?? 0) > 0 || (numbers.externalDisplay ?? 0) > 0
-                ? StatusItemSpaceLabelStyle.badgeClearance : 0
-            let y = max(bottom, min(base.size.height - top - bounds.height * scale,
-                                    bottom + (contentHeight - bounds.height * scale) / 2 + clearance))
+            let horizontalScale = min(scale, maxWidth / bounds.width)
+            let offset = labelAlignment == .ink
+                ? horizontalOpticalOffset(line: line, bounds: bounds, horizontalScale: horizontalScale, verticalScale: scale) : 0
+            labelLayout = Label(line: line, bounds: bounds, scale: scale, horizontalScale: horizontalScale, horizontalOffset: offset)
+            let preferredBaseline = bottom + (contentHeight - font.capHeight * scale) / 2 + StatusItemSpaceLabelStyle.baselineOffset
+            let baseline = max(bottom + descent * scale, min(bottom + contentHeight - ascent * scale, preferredBaseline))
+            // Position the font's origin, rather than independently centering each word's ink box.
+            let y = baseline + bounds.minY * scale
             // Keep the shifted ink inside the anchor frame so zero-inset badges still cannot overlap it.
-            graphicFrame = CGRect(x: 0, y: y, width: bounds.width * scale + 2 * abs(offset),
+            graphicFrame = CGRect(x: 0, y: y, width: bounds.width * horizontalScale + 2 * abs(offset),
                                   height: bounds.height * scale)
         } else {
             labelLayout = nil
@@ -198,10 +214,16 @@ enum StatusItemSpaceBadge {
             // tucks describe actual ink overlap, so cross the border first; other positive values
             // scale that tuck. Negative insets still leave a gap measured in points.
             var proposedInset = inset
-            if usesCornerTucks && inset > 0 {
-                let factor = StatusItemCornerTuckStyle.factor(
-                    for: isInternal ? displayedLabel?.last : displayedLabel?.first, isInternal: isInternal)
-                proposedInset = inset / StatusItemCornerTuckStyle.referenceInset * (border + width * factor)
+            let endCharacter = isInternal ? displayedLabel?.last : displayedLabel?.first
+            if labelLayout != nil && inset > 0 {
+                let strength = inset / StatusItemCornerTuckStyle.referenceInset
+                if usesCornerTucks {
+                    let factor = StatusItemCornerTuckStyle.factor(for: endCharacter, isInternal: isInternal)
+                    proposedInset = strength * (border + width * factor)
+                } else if StatusItemCornerTuckStyle.hasOpenCorner(endCharacter, isInternal: isInternal) {
+                    let extraTuck = isInternal ? StatusItemSpaceLabelStyle.rightOpenCornerTuck : StatusItemSpaceLabelStyle.leftOpenCornerTuck
+                    proposedInset += strength * width * extraTuck
+                }
             }
             // Keep opposing outlines apart on very short labels.
             let inward = hasBoth ? min(proposedInset, graphicFrame.width / 2) : min(proposedInset, graphicFrame.width)
@@ -250,13 +272,14 @@ enum StatusItemSpaceBadge {
                       graphicFrame: graphicFrame, label: labelLayout, numbers: translated, border: border)
     }
 
-    private static func horizontalOpticalOffset(line: CTLine, bounds: CGRect, scale: CGFloat) -> CGFloat {
+    private static func horizontalOpticalOffset(line: CTLine, bounds: CGRect,
+                                                horizontalScale: CGFloat, verticalScale: CGFloat) -> CGFloat {
         let strength = min(max(StatusItemSpaceLabelStyle.opticalCenteringStrength, 0), 1)
         guard strength > 0 else { return 0 }
         // Measure at a fixed resolution, independent of the menu bar's current display scale.
         let sampling: CGFloat = 4
-        let width = Int(ceil(bounds.width * scale * sampling)) + 2
-        let height = Int(ceil(bounds.height * scale * sampling)) + 2
+        let width = Int(ceil(bounds.width * horizontalScale * sampling)) + 2
+        let height = Int(ceil(bounds.height * verticalScale * sampling)) + 2
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                       bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue),
@@ -266,7 +289,7 @@ enum StatusItemSpaceBadge {
         context.setShouldSubpixelPositionFonts(true)
         context.setShouldSubpixelQuantizeFonts(false)
         context.translateBy(x: 1, y: 1)
-        context.scaleBy(x: sampling * scale, y: sampling * scale)
+        context.scaleBy(x: sampling * horizontalScale, y: sampling * verticalScale)
         context.textMatrix = .identity
         context.textPosition = CGPoint(x: -bounds.minX, y: -bounds.minY)
         CTLineDraw(line, context)
@@ -277,7 +300,7 @@ enum StatusItemSpaceBadge {
         var weight: CGFloat = 0, moment: CGFloat = 0
         for y in 0..<height {
             // Bitmap rows run top-to-bottom; map them back to the font's baseline coordinates.
-            let fontY = (CGFloat(height - y) - 1.5) / (sampling * scale) + bounds.minY
+            let fontY = (CGFloat(height - y) - 1.5) / (sampling * verticalScale) + bounds.minY
             let bodyWeight: CGFloat = fontY >= 0 && fontY <= xHeight ? 1 : outerWeight
             for x in 0..<width {
                 let alpha = CGFloat(pixels[y * context.bytesPerRow + x * 4 + 3]) * bodyWeight
@@ -286,8 +309,8 @@ enum StatusItemSpaceBadge {
             }
         }
         guard weight > 0 else { return 0 }
-        let limit = min(StatusItemSpaceLabelStyle.maximumOpticalOffset, bounds.width * scale * 0.05)
-        let correction = max(-limit, min(limit, (bounds.width * scale / 2 - moment / weight) * strength))
+        let limit = min(StatusItemSpaceLabelStyle.maximumOpticalOffset, bounds.width * horizontalScale * 0.05)
+        let correction = max(-limit, min(limit, (bounds.width * horizontalScale / 2 - moment / weight) * strength))
         // Ignore subpixel noise for balanced words instead of changing their padding.
         return abs(correction) < 0.1 ? 0 : correction
     }
