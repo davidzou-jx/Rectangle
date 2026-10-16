@@ -7,6 +7,7 @@ enum StatusItemIconLayout {
     static let topMargin: CGFloat = 2
     static let bottomMargin: CGFloat = 0
     static let horizontalMargin: CGFloat = 1
+    static let minimumWidth: CGFloat = 48
     static let maximumBadgeWidth: CGFloat = 24
 }
 
@@ -237,9 +238,7 @@ enum StatusItemSpaceBadge {
                 badges.append(Number(path: positioned, isInternal: isInternal))
             }
         }
-        guard !badges.isEmpty || labelLayout != nil else { return nil }
-
-        // Reserve exactly the horizontal space needed by the graphic, digits, and transparent outlines.
+        // Fit the graphic, digits and outlines, with a width floor to avoid resizing for short labels.
         var extent = graphicFrame
         for badge in badges { extent = extent.union(badge.frame.insetBy(dx: -border, dy: 0)) }
         let margin = StatusItemIconLayout.horizontalMargin
@@ -255,10 +254,10 @@ enum StatusItemSpaceBadge {
             let halfWidth = usesCornerTucks
                 ? graphicFrame.width / 2 + max(leftProtrusion - opticalShift, rightProtrusion + opticalShift)
                 : max(graphicFrame.midX - extent.minX, extent.maxX - graphicFrame.midX)
-            width = ceil(2 * (halfWidth + margin))
+            width = ceil(max(StatusItemIconLayout.minimumWidth, 2 * (halfWidth + margin)))
             shift = width / 2 - graphicFrame.midX + opticalShift
         } else {
-            width = ceil(extent.width + 2 * margin)
+            width = ceil(max(StatusItemIconLayout.minimumWidth, extent.width + 2 * margin))
             shift = margin - extent.minX + (width - extent.width - 2 * margin) / 2
         }
         graphicFrame.origin.x += shift

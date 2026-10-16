@@ -266,8 +266,11 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
                 }, "The digits should remain visible after fitting and clamping")
             }
         }
-        XCTAssertTrue(StatusItemSpaceBadge.image(base: base, numbers: .init(), style: .init()) === base)
-        XCTAssertTrue(StatusItemSpaceBadge.image(base: base, numbers: .init(internalDisplay: 0, externalDisplay: -1), style: .init()) === base)
+        let plain = StatusItemSpaceBadge.image(base: base, numbers: .init(), style: .init())
+        let invalid = StatusItemSpaceBadge.image(base: base, numbers: .init(internalDisplay: 0, externalDisplay: -1), style: .init())
+        XCTAssertEqual(plain.size.width, StatusItemIconLayout.minimumWidth)
+        XCTAssertEqual(invalid.size, plain.size)
+        XCTAssertEqual(bitmap(invalid, scale: 2).tiffRepresentation, bitmap(plain, scale: 2).tiffRepresentation)
     }
 
     func testSpaceNumbersOverlayTheLabelWithTransparentOutlines() throws {
@@ -340,8 +343,14 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
         let half = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers, style: .init(), label: "Hbb"))
         let gap = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
             style: .init(rightInset: -5, leftInset: -5), label: "Hbb"))
-        XCTAssertEqual(zero.size.width - half.size.width, 8, accuracy: 0.001)
-        XCTAssertEqual(gap.size.width - zero.size.width, 10, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(half.size.width, zero.size.width)
+        XCTAssertGreaterThanOrEqual(gap.size.width, zero.size.width)
+        // Once outside the minimum width, five more points of gap on each side add ten points.
+        let outward = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
+            style: .init(rightInset: -20, leftInset: -20), label: "Hbb"))
+        let further = try XCTUnwrap(StatusItemSpaceBadge.layout(base: base, numbers: numbers,
+            style: .init(rightInset: -25, leftInset: -25), label: "Hbb"))
+        XCTAssertEqual(further.size.width - outward.size.width, 10, accuracy: 0.001)
         for number in half.numbers {
             let overlap = number.frame.intersection(half.graphicFrame).width / number.frame.width
             XCTAssertGreaterThan(overlap, 0.35)
@@ -356,6 +365,30 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
         for number in layout.numbers {
             XCTAssertLessThanOrEqual(number.frame.minY, 2)
             XCTAssertGreaterThanOrEqual(number.frame.minY - layout.border, 0)
+        }
+    }
+
+    func testMinimumWidthStabilizesLabelsAndFallbackWhileAllowingWiderNumbers() throws {
+        for alignment in [StatusItemSpaceLabelAlignment.ink, .letterShapes] {
+            for text in [nil, "", "I", "Cal", "Web", "Dev", "WWW", "mmm", "研究室"] as [String?] {
+                for numbers in [StatusItemSpaceNumbers(), .init(internalDisplay: 5),
+                                .init(internalDisplay: 5, externalDisplay: 8)] {
+                    let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers,
+                        style: .init(), label: text, labelAlignment: alignment))
+                    XCTAssertEqual(layout.size.width, StatusItemIconLayout.minimumWidth, text ?? "Rectangle fallback")
+                    if (layout.label != nil && alignment == .ink) || numbers == StatusItemSpaceNumbers() {
+                        XCTAssertEqual(layout.graphicFrame.midX, layout.size.width / 2, accuracy: 0.001)
+                    }
+                }
+            }
+            let wide = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(),
+                numbers: .init(internalDisplay: Int.max, externalDisplay: Int.max),
+                style: .init(), label: "mmm", labelAlignment: alignment))
+            XCTAssertGreaterThan(wide.size.width, StatusItemIconLayout.minimumWidth)
+            for number in wide.numbers {
+                XCTAssertGreaterThanOrEqual(number.frame.minX - wide.border, StatusItemIconLayout.horizontalMargin - 0.001)
+                XCTAssertLessThanOrEqual(number.frame.maxX + wide.border, wide.size.width - StatusItemIconLayout.horizontalMargin + 0.001)
+            }
         }
     }
 
@@ -605,7 +638,9 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
             // Weighted centering needs more room than simply summing the two protrusions.
             XCTAssertGreaterThanOrEqual(extent.minX, StatusItemIconLayout.horizontalMargin - 0.001)
             XCTAssertLessThanOrEqual(extent.maxX, layout.size.width - StatusItemIconLayout.horizontalMargin + 0.001)
-            XCTAssertLessThan(min(extent.minX, layout.size.width - extent.maxX), StatusItemIconLayout.horizontalMargin + 0.5)
+            if layout.size.width > StatusItemIconLayout.minimumWidth {
+                XCTAssertLessThan(min(extent.minX, layout.size.width - extent.maxX), StatusItemIconLayout.horizontalMargin + 0.5)
+            }
         }
     }
 
