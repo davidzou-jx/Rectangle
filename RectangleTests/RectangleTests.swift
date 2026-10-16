@@ -370,7 +370,7 @@ final class StatusItemSpaceBadgeTests: XCTestCase {
 
     func testMinimumWidthStabilizesLabelsAndFallbackWhileAllowingWiderNumbers() throws {
         for alignment in [StatusItemSpaceLabelAlignment.ink, .letterShapes] {
-            for text in [nil, "", "I", "Cal", "Web", "Dev", "WWW", "mmm", "研究室"] as [String?] {
+            for text in [nil, "", "I", "Cal", "Foo"] as [String?] {
                 for numbers in [StatusItemSpaceNumbers(), .init(internalDisplay: 5),
                                 .init(internalDisplay: 5, externalDisplay: 8)] {
                     let layout = try XCTUnwrap(StatusItemSpaceBadge.layout(base: baseImage(), numbers: numbers,

@@ -7,7 +7,7 @@ enum StatusItemIconLayout {
     static let topMargin: CGFloat = 2
     static let bottomMargin: CGFloat = 0
     static let horizontalMargin: CGFloat = 1
-    static let minimumWidth: CGFloat = 48
+    static let minimumWidth: CGFloat = 36
     static let rectangleScale: CGFloat = 1.10
     static let maximumBadgeWidth: CGFloat = 24
 }
