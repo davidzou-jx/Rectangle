@@ -8,6 +8,7 @@ enum StatusItemIconLayout {
     static let bottomMargin: CGFloat = 0
     static let horizontalMargin: CGFloat = 1
     static let minimumWidth: CGFloat = 48
+    static let rectangleScale: CGFloat = 1.10
     static let maximumBadgeWidth: CGFloat = 24
 }
 
@@ -127,7 +128,11 @@ enum StatusItemSpaceBadge {
                                   labelAlignment: labelAlignment) else { return base }
         let image = NSImage(size: layout.size, flipped: false) { _ in
             if layout.label == nil {
-                base.draw(in: layout.graphicFrame, from: .zero, operation: .sourceOver, fraction: 1)
+                // Enlarge the artwork without moving the badge anchors or changing the item's width.
+                let expansion = (StatusItemIconLayout.rectangleScale - 1) / 2
+                let frame = layout.graphicFrame.insetBy(dx: -layout.graphicFrame.width * expansion,
+                                                        dy: -layout.graphicFrame.height * expansion)
+                base.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1)
             }
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             context.saveGState()

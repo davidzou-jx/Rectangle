@@ -59,6 +59,8 @@ defaults write com.knollsoft.Rectangle alternateDefaultShortcuts -bool true
 
 The menu bar icon shows the internal display's current desktop number in its bottom-right corner and the external display's number in its bottom-left corner. The positions stay fixed when focus moves between displays. This supports one internal display and one external display; a disconnected display's number is omitted. Numbers follow Mission Control's desktop order across displays, matching Rectangle's numbered Space shortcuts. A display's number is also omitted when it shows a full-screen Space or its Space information is unavailable.
 
+`StatusItemIconLayout.rectangleScale` in [StatusItemSpaceBadge.swift](Rectangle/StatusItemSpaceBadge.swift) controls the Rectangle artwork's drawing size (default `1.10`, or 110%) independently of the badge anchors.
+
 The badge uses the menu bar's monochrome tint, with a transparent outline separating the digits from the window icon. Customize its size, outline, and position in points (the values below are the defaults), then restart Rectangle:
 
 ```bash
