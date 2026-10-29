@@ -1,4 +1,5 @@
 import AppKit
+import MASShortcut
 import SwiftUI
 
 // MARK: - AppKit View Controller Wrapper
@@ -202,6 +203,13 @@ struct BehaviorSettingsView: View {
                         }
                         Divider()
                         VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Only stack windows of the same size", isOn: $viewModel.stackSameSizeOnly)
+                            Text("For the window list and the cycle shortcuts. When off, windows stacked at the same top-left position count whatever their size")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
                             Toggle("Show stacked window list on hover", isOn: $viewModel.stackBadge)
                             Text("Hover cursor near the top left corner of a window to show the list")
                                 .font(.caption)
@@ -210,8 +218,25 @@ struct BehaviorSettingsView: View {
                         HStack {
                             Text("Toggle window list")
                             Spacer()
-                            MASShortcutViewRepresentable(defaultsKey: StackBadgeManager.toggleDefaultsKey, validator: nil)
+                            MASShortcutViewRepresentable(defaultsKey: StackBadgeManager.toggleDefaultsKey, validator: nil,
+                                                         recordingObserver: viewModel.shortcutRecordingObserver)
                                 .frame(width: 160, height: 24)
+                        }
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Cycle stacked windows")
+                                Spacer()
+                                windowActionShortcutView(.cycleStackedWindows)
+                            }
+                            HStack {
+                                Text("Cycle stacked windows backward")
+                                Spacer()
+                                windowActionShortcutView(.cycleStackedWindowsBackward)
+                            }
+                            Text("Bring forward the windows snapped to the same area as the focused window, one at a time")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                     .padding(.top, 4)
@@ -322,7 +347,8 @@ struct BehaviorSettingsView: View {
                                     Spacer()
                                     MASShortcutViewRepresentable(
                                         defaultsKey: TodoManager.toggleDefaultsKey,
-                                        validator: TodoShortcutValidator(defaultsKey: TodoManager.toggleDefaultsKey)
+                                        validator: TodoShortcutValidator(defaultsKey: TodoManager.toggleDefaultsKey),
+                                        recordingObserver: viewModel.shortcutRecordingObserver
                                     )
                                     .frame(width: 130, height: 22)
                                 }
@@ -332,7 +358,8 @@ struct BehaviorSettingsView: View {
                                     Spacer()
                                     MASShortcutViewRepresentable(
                                         defaultsKey: TodoManager.reflowDefaultsKey,
-                                        validator: TodoShortcutValidator(defaultsKey: TodoManager.reflowDefaultsKey)
+                                        validator: TodoShortcutValidator(defaultsKey: TodoManager.reflowDefaultsKey),
+                                        recordingObserver: viewModel.shortcutRecordingObserver
                                     )
                                     .frame(width: 130, height: 22)
                                 }
@@ -396,6 +423,12 @@ struct BehaviorSettingsView: View {
                         Toggle("Preserve side axis size for half actions, similar to Windows", isOn: $viewModel.halvesPreserveOtherAxisSize)
                         Toggle("Show warning when windows cannot be resized small enough", isOn: $viewModel.showMinimumWindowSizeWarning)
                         Toggle("Show *Extra* shortcuts in menu", isOn: $viewModel.showAdditionalSizesInMenu)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Toggle("Mouse button shortcuts act on the window under the pointer", isOn: $viewModel.mouseButtonShortcutsUseWindowUnderCursor)
+                            Text("Keyboard shortcuts always act on the focused window")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         if viewModel.showCombinedDisplayMode {
                             VStack(alignment: .leading, spacing: 2) {
                                 Toggle("Treat multiple displays as one", isOn: $viewModel.combinedDisplayMode)
@@ -416,6 +449,18 @@ struct BehaviorSettingsView: View {
         .frame(width: 500)
         .animation(.easeInOut(duration: 0.2), value: viewModel.todoEnabled)
         .animation(.easeInOut(duration: 0.2), value: viewModel.subsequentExecutionMode)
+    }
+
+    /// A recorder for a window action's shortcut, validated like the ones on
+    /// the Shortcuts tab.
+    private func windowActionShortcutView(_ action: WindowAction) -> some View {
+        MASShortcutViewRepresentable(
+            defaultsKey: action.name,
+            validator: viewModel.allowAnyShortcut ? PassthroughShortcutValidator() : MASShortcutValidator(),
+            recordingObserver: viewModel.shortcutRecordingObserver,
+            recordsMouseButtons: true
+        )
+        .frame(width: 160, height: 24)
     }
 }
 

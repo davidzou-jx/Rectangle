@@ -56,6 +56,16 @@ class ScreenDetection {
         return UsableScreens(currentScreen: cursorScreen, adjacentScreens: adjacentScreens, numScreens: screens.count, screensOrdered: screensOrdered)
     }
 
+    func detectScreens(at screen: NSScreen) -> UsableScreens? {
+        let screens = availableScreens()
+        guard screens.contains(screen) else { return nil }
+        if screens.count == 1 { return detectScreens(using: nil) }
+        let ordered = order(screens: screens)
+        return UsableScreens(currentScreen: screen,
+                             adjacentScreens: adjacent(toFrameOfScreen: screen.frame, screens: ordered),
+                             numScreens: screens.count, screensOrdered: ordered)
+    }
+
     func screenContaining(_ rect: CGRect, screens: [NSScreen]) -> NSScreen? {
         var result: NSScreen? = NSScreen.main
         var largestPercentageOfRectWithinFrameOfScreen: CGFloat = 0.0
@@ -390,6 +400,22 @@ enum DockUtil {
     }
 }
 
+enum MenuBarUtil {
+    // When only the frontmost app hides the menu bar, macOS keeps reporting its strip as reserved
+    // in NSScreen.visibleFrame, so windows stop short of the top of the screen (#1043).
+    // Opting in extends the frame to the top edge, staying below a notch, where macOS never places windows.
+    static func frameIgnoringMenuBar(_ visibleFrame: CGRect,
+                                     screenFrame: CGRect,
+                                     topSafeAreaInset: CGFloat) -> CGRect {
+        guard !visibleFrame.isNull, !screenFrame.isNull else { return visibleFrame }
+        let maxY = screenFrame.maxY - max(0, topSafeAreaInset)
+        guard maxY > visibleFrame.maxY else { return visibleFrame }
+        var frame = visibleFrame
+        frame.size.height = maxY - frame.minY
+        return frame
+    }
+}
+
 extension NSScreen {
 
     func adjustedVisibleFrame(_ ignoreTodo: Bool = false, _ ignoreStage: Bool = false) -> CGRect {
@@ -400,7 +426,7 @@ extension NSScreen {
         if !NSScreen.screensHaveSeparateSpaces && Defaults.combinedDisplayMode.userEnabled {
             let combinedScreenFrame = dockSnapshot.screenFrames.reduce(CGRect.null) { $0.union($1) }
             let combinedVisibleFrame = screens.reduce(CGRect.null) {
-                $0.union(DockUtil.correctedVisibleFrame(for: $1, snapshot: dockSnapshot))
+                $0.union($1.correctedVisibleFrame(snapshot: dockSnapshot))
             }
             newFrame = DockUtil.correctedVisibleFrame(
                 screenFrame: combinedScreenFrame,
@@ -410,7 +436,7 @@ extension NSScreen {
                 dockAutoHideEnabled: dockSnapshot.dockAutoHideEnabled
             )
         } else {
-            newFrame = DockUtil.correctedVisibleFrame(for: self, snapshot: dockSnapshot)
+            newFrame = correctedVisibleFrame(snapshot: dockSnapshot)
         }
 
         if !ignoreStage && Defaults.stageSize.value > 0 {
@@ -441,9 +467,24 @@ extension NSScreen {
         newFrame.origin.x += Defaults.screenEdgeGapLeft.cgFloat
         newFrame.origin.y += Defaults.screenEdgeGapBottom.cgFloat
         newFrame.size.width -= (Defaults.screenEdgeGapLeft.cgFloat + Defaults.screenEdgeGapRight.cgFloat)
-        newFrame.size.height -= (Defaults.screenEdgeGapTopNotch.cgFloat + Defaults.screenEdgeGapBottom.cgFloat)
         
+        // A negative notch gap (the default) means it isn't set, so the regular top gap applies.
+        let notchGap = Defaults.screenEdgeGapTopNotch.value
+        if self.safeAreaInsets.top != 0, notchGap >= 0 {
+            newFrame.size.height -= (CGFloat(notchGap) + Defaults.screenEdgeGapBottom.cgFloat)
+        } else {
+            newFrame.size.height -= (Defaults.screenEdgeGapTop.cgFloat + Defaults.screenEdgeGapBottom.cgFloat)
+        }
+
         return newFrame
+    }
+
+    /// The Dock-corrected visible frame, extended to the top of the screen when the user
+    /// has opted out of the menu bar reservation (#1043).
+    private func correctedVisibleFrame(snapshot: DockUtil.Snapshot) -> CGRect {
+        let visibleFrame = DockUtil.correctedVisibleFrame(for: self, snapshot: snapshot)
+        guard Defaults.ignoreMenuBar.userEnabled else { return visibleFrame }
+        return MenuBarUtil.frameIgnoringMenuBar(visibleFrame, screenFrame: frame, topSafeAreaInset: safeAreaInsets.top)
     }
 
     static var portraitDisplayConnected: Bool {

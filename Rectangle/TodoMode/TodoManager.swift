@@ -169,6 +169,10 @@ class TodoManager {
     static func isTodoWindow(_ windowId: CGWindowID) -> Bool {
         return getTodoWindowElement()?.windowId == windowId
     }
+
+    static func getTodoWindowId() -> CGWindowID? {
+        return getTodoWindowElement()?.windowId
+    }
     
     static func resetTodoWindow() {
         todoWindowId = nil
@@ -196,31 +200,35 @@ class TodoManager {
                 }
 
                 adjustedVisibleFrame = screen.adjustedVisibleFrame(true)
-                let sidebarWidth = getSidebarWidth(visibleFrameWidth: adjustedVisibleFrame.width)
-
-                var sharedEdge: Edge
-                var rect = adjustedVisibleFrame
-                let isRightSide = Defaults.todoSidebarSide.value == .right
-
-                sharedEdge = isRightSide ? .left : .right
-
-                if isRightSide {
-                    rect.origin.x = adjustedVisibleFrame.maxX - sidebarWidth
-                }
-                rect.size.width = sidebarWidth
-
-                rect = rect.screenFlipped
-                
-                if Defaults.gapSize.value > 0 {
-                    rect = GapCalculation.applyGaps(rect, sharedEdges: sharedEdge, gapSize: Defaults.gapSize.value)
-                }
-                todoWindow.setFrame(rect)
+                moveTodoWindow(todoWindow, screenVisibleFrame: adjustedVisibleFrame)
             }
 
             if bringToFront {
                 todoWindow.bringToFront()
             }
         }
+    }
+
+    static func moveTodoWindow(_ todoWindow: AccessibilityElement,
+                               screenVisibleFrame: CGRect,
+                               primaryScreenMaxY: CGFloat = NSScreen.screens[0].frame.maxY) {
+        let sidebarWidth = getSidebarWidth(visibleFrameWidth: screenVisibleFrame.width)
+        let isRightSide = Defaults.todoSidebarSide.value == .right
+        let sharedEdge: Edge = isRightSide ? .left : .right
+        var rect = screenVisibleFrame
+
+        if isRightSide {
+            rect.origin.x = screenVisibleFrame.maxX - sidebarWidth
+        }
+        rect.size.width = sidebarWidth
+
+        // Accessibility coordinates are relative to the primary display, even on other displays.
+        rect = rect.screenFlipped(primaryScreenMaxY: primaryScreenMaxY)
+
+        if Defaults.gapSize.value > 0 {
+            rect = GapCalculation.applyGaps(rect, sharedEdges: sharedEdge, gapSize: Defaults.gapSize.value)
+        }
+        todoWindow.setFrame(rect)
     }
     
     static func getSidebarWidth(visibleFrameWidth: CGFloat) -> CGFloat {
@@ -292,7 +300,7 @@ class TodoManager {
     
     static func execute(parameters: ExecutionParameters) -> Bool {
         if [.leftTodo, .rightTodo].contains(parameters.action) {
-            moveAll()
+            moveAll(!parameters.preservesFocus)
             return true
         }
         return false

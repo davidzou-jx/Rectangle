@@ -147,9 +147,15 @@ class SnappingManager {
             self.startEventMonitor()
         }
         Notification.Name.frontAppChanged.onPost(using: frontAppChanged)
+        Notification.Name.windowActionWillExecute.onPost { [weak self] notification in
+            guard let self, self.box?.waitingForPlacement == true,
+                  (notification.object as? ExecutionParameters)?.source != .dragToSnap else { return }
+            self.box?.orderOut(nil)
+        }
     }
     
     func frontAppChanged(notification: Notification) {
+        box?.cancelPlacementIfInactive()
         if ApplicationToggle.shortcutsDisabled {
             DispatchQueue.main.async {
                 if !Defaults.ignoreDragSnapToo.userDisabled {
@@ -190,6 +196,7 @@ class SnappingManager {
     }
     
     @objc func receiveWorkspaceNote(_ notification: Notification) {
+        if box?.waitingForPlacement == true { box?.orderOut(nil) }
         checkFullScreen()
     }
     
@@ -228,6 +235,7 @@ class SnappingManager {
     }
     
     private func disableSnapping() {
+        box?.close()
         box = nil
         stopEventMonitor()
     }
@@ -239,6 +247,7 @@ class SnappingManager {
     }
     
     private func stopEventMonitor() {
+        if box?.waitingForPlacement == true { box?.orderOut(nil) }
         pendingReleasedRestore = nil
         eventMonitor?.stop()
         eventMonitor = nil
@@ -288,6 +297,7 @@ class SnappingManager {
 
         switch event.type {
         case .keyDown:
+            if box?.waitingForPlacement == true { box?.orderOut(nil) }
             guard event.keyCode == 53, nativeGesture.held else { return }
             nativeGesture.cancel()
             currentSnapArea = nil
@@ -321,8 +331,8 @@ class SnappingManager {
             }
             if let currentSnapArea = self.currentSnapArea {
                 nativeSizeRestore = nil
-                dismissSnapPreviewForCommit()
-                currentSnapArea.action.postSnap(windowElement: windowElement, windowId: windowId, screen: currentSnapArea.screen)
+                let completion = snapPreviewCompletion()
+                currentSnapArea.action.postSnap(windowElement: windowElement, windowId: windowId, screen: currentSnapArea.screen, completion: completion, cancellation: completion)
                 self.currentSnapArea = nil
             } else {
                 // it's possible that the window has moved, but the mouse dragged events are not getting the updated window position
@@ -336,10 +346,10 @@ class SnappingManager {
                     }
                     
                     if let snapArea = snapAreaContainingCursor(priorSnapArea: currentSnapArea, event: event)  {
-                        dismissSnapPreviewForCommit()
                         if canSnap(event) {
-                            snapArea.action.postSnap(windowElement: windowElement, windowId: windowId, screen: snapArea.screen)
-                        }
+                            let completion = snapPreviewCompletion()
+                            snapArea.action.postSnap(windowElement: windowElement, windowId: windowId, screen: snapArea.screen, completion: completion, cancellation: completion)
+                        } else { box?.orderOut(nil) }
                         self.currentSnapArea = nil
                     }
                 }
@@ -593,8 +603,12 @@ class SnappingManager {
         return AppDelegate.windowHistory.restoreRects[windowId]
     }
     
-    private func dismissSnapPreviewForCommit() {
+    private func snapPreviewCompletion() -> (() -> Void)? {
+        if WindowAnimator.enabled && Defaults.footprintBlur.enabled {
+            return box?.completionForSnap(windowID: windowId)
+        }
         box?.orderOut(nil)
+        return nil
     }
 
     private func showSnapPreview(in rect: CGRect, snapArea: SnapArea) {
@@ -605,7 +619,8 @@ class SnappingManager {
             box = FootprintWindow(initialFrame: rect)
         }
         box?.showPreview(in: rect, from: getFootprintAnimationOrigin(snapArea, rect),
-                         duration: getFootprintAnimationDuration())
+                         duration: getFootprintAnimationDuration(),
+                         below: WindowAnimator.enabled && Defaults.footprintBlur.enabled ? windowId : nil)
     }
 
     func getFootprintAnimationDuration() -> Double {
@@ -673,8 +688,9 @@ class SnappingManager {
     }
 
     func snapAreaContainingCursor(priorSnapArea: SnapArea?, at loc: CGPoint) -> SnapArea? {
-        for screen in NSScreen.screens {
-            guard let directional = directionalLocationOfCursor(loc: loc, screen: screen)
+        let screens = NSScreen.screens
+        for screen in screens {
+            guard let directional = directionalLocationOfCursor(loc: loc, screen: screen, screens: screens)
             else { continue }
             
             if let windowId = windowId, Defaults.todo.userEnabled && Defaults.todoMode.enabled && TodoManager.isTodoWindow(windowId) {
@@ -701,48 +717,12 @@ class SnappingManager {
         return nil
     }
     
-    func directionalLocationOfCursor(loc: NSPoint, screen: NSScreen) -> Directional? {
-        let frame = screen.frame
-        let cornerSize = Defaults.cornerSnapAreaSize.cgFloat
-        
-        /// cgrect contains doesn't include max edges, so manually compare
-        guard loc.x >= frame.minX,
-              loc.x <= frame.maxX,
-              loc.y >= frame.minY,
-              loc.y <= frame.maxY
-        else { return nil }
-        
-        if loc.x < frame.minX + marginLeft + cornerSize {
-            if loc.y >= frame.maxY - marginTop - cornerSize {
-                return .tl
-            }
-            if loc.y <= frame.minY + marginBottom + cornerSize {
-                return .bl
-            }
-            if loc.x < frame.minX + marginLeft {
-                return .l
-            }
-        }
-        
-        if loc.x > frame.maxX - marginRight - cornerSize {
-            if loc.y >= frame.maxY - marginTop - cornerSize {
-                return .tr
-            }
-            if loc.y <= frame.minY + marginBottom + cornerSize {
-                return .br
-            }
-            if loc.x > frame.maxX - marginRight {
-                return .r
-            }
-        }
-        
-        if loc.y > frame.maxY - marginTop {
-            return .t
-        }
-        if loc.y < frame.minY + marginBottom {
-            return .b
-        }
-        
-        return nil
+    func directionalLocationOfCursor(loc: NSPoint, screen: NSScreen, screens: [NSScreen]? = nil) -> Directional? {
+        return SnapEdgeDetection.direction(
+            at: loc, in: screen.frame, screens: (screens ?? NSScreen.screens).map(\.frame),
+            margins: NSEdgeInsets(top: marginTop, left: marginLeft, bottom: marginBottom, right: marginRight),
+            cornerSize: Defaults.cornerSnapAreaSize.cgFloat,
+            earlyDistance: CGFloat(Defaults.snapBeforeReachingEdges.value)
+        )
     }
 }

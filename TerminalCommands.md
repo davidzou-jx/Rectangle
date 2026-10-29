@@ -11,6 +11,7 @@ The preferences window is purposefully slim, but there's a lot that can be modif
 - [Resize on Directional Move](#resize-on-directional-move)
 - [Make the half actions tile like Windows or KDE](#make-the-half-actions-tile-like-windows-or-kde)
 - [Adjust macOS Ventura Stage Manager size](#adjust-macos-ventura-stage-manager-size)
+- [Make Center respect the Stage Manager strip](#make-center-respect-the-stage-manager-strip)
 - [Enable Todo Mode](#enable-todo-mode)
 - [Only allow drag-to-snap when modifier keys are pressed](#only-allow-drag-to-snap-when-modifier-keys-are-pressed)
 - [Almost Maximize](#almost-maximize)
@@ -18,6 +19,8 @@ The preferences window is purposefully slim, but there's a lot that can be modif
 - [Add an extra centering command with custom size](#add-an-extra-centering-command-with-custom-size)
 - [Add extra "ninths" sizing commands](#add-extra-ninths-sizing-commands)
 - [Add extra "eighths" sizing commands](#add-extra-eighths-sizing-commands)
+- [Add extra "full-height eighths" sizing commands](#add-extra-full-height-eighths-sizing-commands)
+- [Add extra "full-height sixths" sizing commands](#add-extra-full-height-sixths-sizing-commands)
 - [Add additional "thirds" sizing commands](#add-additional-thirds-sizing-commands)
 - [Add doubling/halving window sizing commands](#add-doublinghalving-window-sizing-commands)
 - [Add additional tiling and cascading commands](#add-additional-tiling-and-cascading-commands)
@@ -32,6 +35,7 @@ The preferences window is purposefully slim, but there's a lot that can be modif
 - [Disabling window restore when moving windows](#disabling-window-restore-when-moving-windows)
 - [Changing the margin for the snap areas](#changing-the-margin-for-the-snap-areas)
 - [Setting gaps at the screen edges](#setting-gaps-at-the-screen-edges)
+- [Use the full screen height when the menu bar is hidden](#use-the-full-screen-height-when-the-menu-bar-is-hidden)
 - [Ignore specific drag to snap areas](#ignore-specific-drag-to-snap-areas)
 - [Disabling gaps when maximizing](#disabling-gaps-when-maximizing)
 - [Enabling snap areas for sixths](#enabling-snap-areas-for-sixths)
@@ -92,6 +96,8 @@ defaults write com.knollsoft.Rectangle subsequentExecutionMode -int 2
 2: disabled
 3: cycle displays for left/right actions, halves to thirds for the rest (old Rectangle behavior)
 4: repeat same action on next display
+5: cycle positions on quadrants, cycle sizes on side
+6: switch to the opposite side on half actions
 
 ## Cycle thirds on repeated Center Half commands
 
@@ -141,6 +147,16 @@ To set it to a proportion of your screen's width, set it to a value between 0 an
 ```bash
 defaults write com.knollsoft.Rectangle stageSize -float <VALUE_BETWEEN_0_AND_1>
 ```
+
+## Make Center respect the Stage Manager strip
+
+By default, Center and the extra centering with prominence command ignore the Stage Manager strip and center the window on the full width of the screen, even while the other actions leave room for the strip. Enable this to have those two commands leave room for it too:
+
+```bash
+defaults write com.knollsoft.Rectangle alwaysAccountForStage -bool true
+```
+
+This only affects those two commands. Like every other action, they only leave room for the strip while it is actually showing with windows in it, so this is not a way to keep a permanent gap on that side of the screen; for that, see [Setting gaps at the screen edges](#setting-gaps-at-the-screen-edges).
 
 ## Enable Todo Mode
 
@@ -260,6 +276,50 @@ For example, the command for setting the top left eighth shortcut to `ctrl opt s
 ```bash
 defaults write com.knollsoft.Rectangle topLeftEighth -dict-add keyCode -float 18 modifierFlags -float 917504
 ```
+
+## Add extra "full-height eighths" sizing commands
+
+These hidden commands divide a landscape display into 8 full-height vertical columns. On a portrait display, they automatically rotate into 8 horizontal rows.
+
+The key codes are:
+
+* firstVerticalEighth
+* secondVerticalEighth
+* thirdVerticalEighth
+* fourthVerticalEighth
+* fifthVerticalEighth
+* sixthVerticalEighth
+* seventhVerticalEighth
+* lastVerticalEighth
+
+For example, the command for setting the first vertical eighth shortcut to `ctrl opt shift 1` would be:
+
+```bash
+defaults write com.knollsoft.Rectangle firstVerticalEighth -dict-add keyCode -float 18 modifierFlags -float 917504
+```
+
+Repeating `firstVerticalEighth` cycles forward through all 8 positions. Repeating `lastVerticalEighth` cycles through them in reverse when repeated-command behavior is enabled.
+
+## Add extra "full-height sixths" sizing commands
+
+These commands divide a landscape display into 6 full-height vertical columns. On a portrait display, they automatically rotate into 6 horizontal rows. They can be configured under the "Extra" section of the Shortcuts settings, or via CLI.
+
+The key codes are:
+
+* firstVerticalSixth
+* secondVerticalSixth
+* thirdVerticalSixth
+* fourthVerticalSixth
+* fifthVerticalSixth
+* lastVerticalSixth
+
+For example, the command for setting the first vertical sixth shortcut to `ctrl opt shift 1` would be:
+
+```bash
+defaults write com.knollsoft.Rectangle firstVerticalSixth -dict-add keyCode -float 18 modifierFlags -float 917504
+```
+
+Repeating `firstVerticalSixth` cycles forward through all 6 positions. Repeating `lastVerticalSixth` cycles through them in reverse when repeated-command behavior is enabled.
 
 ## Add additional "thirds" sizing commands 
 
@@ -450,6 +510,8 @@ Keeps the window restore behavior above for everything else:
 defaults write com.knollsoft.Rectangle unsnapRestoreFromSizeChange -int 2
 ```
 
+This can also be toggled with the "Also restore windows resized with Larger or Smaller" checkbox in the Snap Areas tab of the Settings window.
+
 ## Changing the margin for the snap areas
 
 Each margin is configured separately, and has a default value of 5
@@ -460,6 +522,16 @@ defaults write com.knollsoft.Rectangle snapEdgeMarginBottom -int 10
 defaults write com.knollsoft.Rectangle snapEdgeMarginLeft -int 10
 defaults write com.knollsoft.Rectangle snapEdgeMarginRight -int 10
 ```
+
+## Snapping before reaching screen edges
+
+The “Snap before reaching screen edges” toggle sets `snapBeforeReachingEdges` to 20 points when enabled and 0 when disabled. A custom distance can be set with:
+
+```bash
+defaults write com.knollsoft.Rectangle snapBeforeReachingEdges -float 30
+```
+
+Restart Rectangle after changing the value. A positive distance overrides the `snapEdgeMargin` values on exposed outer edges, even when those margins are larger. Shared display boundaries and corner targets retain their existing margins. Set the distance to 0 to return to the configured edge margins.
 
 ## Setting gaps at the screen edges
 
@@ -472,16 +544,38 @@ defaults write com.knollsoft.Rectangle screenEdgeGapLeft -int 10
 defaults write com.knollsoft.Rectangle screenEdgeGapRight -int 10
 ```
 
-You can also separately specify the gap for a screen with a notch. Useful for multi display setups if you are using a menubar replacement.
+You can also separately specify the gap for a screen with a notch. Useful for multi display setups if you are using a menubar replacement. When this is set, it replaces `screenEdgeGapTop` on screens with a notch, so a value of `0` removes the top gap on those screens.
 
 ```bash
 defaults write com.knollsoft.Rectangle screenEdgeGapTopNotch -int 5
+```
+
+To go back to using `screenEdgeGapTop` on screens with a notch:
+
+```bash
+defaults delete com.knollsoft.Rectangle screenEdgeGapTopNotch
 ```
 
 If you want these gaps to be applied on your main screen only you can set screenEdgeGapsOnMainScreenOnly. Useful for multi display setups where only one screen has some dock replacement.
 
 ```bash
 defaults write com.knollsoft.Rectangle screenEdgeGapsOnMainScreenOnly -bool true
+```
+
+## Use the full screen height when the menu bar is hidden
+
+Some apps hide the menu bar only while they are frontmost (for example with `LSUIPresentationMode` in their Info.plist). macOS keeps reporting the menu bar's strip as reserved to other apps, so Rectangle leaves it empty at the top of the screen. To have Rectangle use the whole screen height instead, execute:
+
+```bash
+defaults write com.knollsoft.Rectangle ignoreMenuBar -bool true
+```
+
+Only enable this when your menu bar is hidden: while it is visible, macOS keeps windows below it, so a full-height window is pushed down and its bottom edge ends up off screen. If the menu bar is hidden system-wide in System Settings, macOS already reports the full height and this changes nothing. Windows stay below the notch on displays that have one, and the screen edge gaps above still apply.
+
+Restart Rectangle after changing this preference. To restore the default:
+
+```bash
+defaults delete com.knollsoft.Rectangle ignoreMenuBar
 ```
 
 ## Ignore specific drag to snap areas

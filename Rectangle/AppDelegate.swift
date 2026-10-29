@@ -7,8 +7,6 @@ import os.log
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
 
-    static let launcherAppId = "com.knollsoft.RectangleLauncher"
-
     private let accessibilityAuthorization = AccessibilityAuthorization()
     private let statusItem = RectangleStatusItem.instance
     static let windowHistory = WindowHistory()
@@ -257,7 +255,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @IBAction func openPreferences(_ sender: Any) {
         if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController()
+            let controller = SettingsWindowController()
+            controller.onClose = { [weak self] in self?.settingsWindowController = nil }
+            settingsWindowController = controller
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.showWindow(self)
@@ -596,7 +596,9 @@ extension AppDelegate: NSWindowDelegate {
 
 extension AppDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
-        if NSWorkspace.shared.frontmostApplication == NSRunningApplication.current {
+        let triggeringApp = NSWorkspace.shared.frontmostApplication
+        
+        if triggeringApp == NSRunningApplication.current {
             prevActiveApp?.activate()
         }
         DispatchQueue.main.async {
@@ -618,21 +620,15 @@ extension AppDelegate {
             }
             
             func confirmExecuteTask(action: String, bundleId: String) -> Bool {
-                // Defense-in-depth: any web page or another app can trigger the
-                // `rectangle://execute-task=ignore-app` URL with an arbitrary
-                // bundle-id. Without confirmation this silently mutates
-                // Rectangle's `disabledApps` defaults. Skip the prompt only
-                // when Rectangle itself is frontmost (i.e. the user almost
-                // certainly clicked this from inside Rectangle's own UI).
-                if NSWorkspace.shared.frontmostApplication == NSRunningApplication.current {
+                if triggeringApp == NSRunningApplication.current {
                     return true
                 }
                 let alert = NSAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "Allow Rectangle URL action?".localized
-                alert.informativeText = String(format: "An external source asked Rectangle to perform \"%@\" on app bundle id \"%@\". Allow?".localized, action, bundleId)
-                alert.addButton(withTitle: "Allow".localized)
-                alert.addButton(withTitle: "Cancel".localized)
+                alert.messageText = String(localized: "Allow Rectangle URL action?")
+                alert.informativeText = String(localized: "An external source asked Rectangle to perform \"\(action)\" on app bundle id \"\(bundleId)\". Allow?")
+                alert.addButton(withTitle: String(localized: "Allow"))
+                alert.addButton(withTitle: String(localized: "Cancel"))
                 NSApp.activate(ignoringOtherApps: true)
                 return alert.runModal() == .alertFirstButtonReturn
             }
@@ -685,12 +681,12 @@ extension AppDelegate: SPUStandardUserDriverDelegate {
         }
         
         self.hasPendingUpdate = true
-        updatesMenuItem.title = "Update Available…".localized
+        updatesMenuItem.title = String(localized: "Update Available…")
         return false
     }
     
     func standardUserDriverWillFinishUpdateSession() {
         self.hasPendingUpdate = false
-        updatesMenuItem.title = "Check for Updates…".localized(key: "HIK-3r-i7E.title")
+        updatesMenuItem.title = String(localized: "Check for Updates…")
     }
 }

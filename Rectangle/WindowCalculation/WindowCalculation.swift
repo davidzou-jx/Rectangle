@@ -37,11 +37,18 @@ class WindowCalculation: Calculation {
     }
     
     func isRepeatedCommand(_ params: WindowCalculationParameters) -> Bool {
-        if let lastAction = params.lastAction, lastAction.action == params.action {
-            let normalizedLastRect = lastAction.rect.screenFlipped
-            return normalizedLastRect == params.window.rect
-        }
-        return false
+        isRepeatedCommand(lastAction: params.lastAction, action: params.action, windowRect: params.window.rect)
+    }
+
+    func isRepeatedCommand(_ params: RectCalculationParameters) -> Bool {
+        isRepeatedCommand(lastAction: params.lastAction, action: params.action, windowRect: params.window.rect)
+    }
+
+    /// The same action was just executed on this window and the window has not moved since.
+    private func isRepeatedCommand(lastAction: RectangleAction?, action: WindowAction, windowRect: CGRect) -> Bool {
+        guard let lastAction, lastAction.action == action else { return false }
+        let normalizedLastRect = lastAction.rect.screenFlipped
+        return normalizedLastRect == windowRect
     }
     
 }
@@ -266,6 +273,20 @@ class WindowCalculationFactory {
     static let bottomCenterRightSixteenthCalculation = BottomCenterRightSixteenthCalculation()
     static let bottomRightSixteenthCalculation = BottomRightSixteenthCalculation()
     static let specificDisplayCalculation = SpecificDisplayCalculation()
+    static let firstVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 0)
+    static let secondVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 1)
+    static let thirdVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 2)
+    static let fourthVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 3)
+    static let fifthVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 4)
+    static let sixthVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 5)
+    static let seventhVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 6)
+    static let lastVerticalEighthCalculation = VerticalEighthCalculation(ordinal: 7)
+    static let firstVerticalSixthCalculation = VerticalSixthCalculation(ordinal: 0)
+    static let secondVerticalSixthCalculation = VerticalSixthCalculation(ordinal: 1)
+    static let thirdVerticalSixthCalculation = VerticalSixthCalculation(ordinal: 2)
+    static let fourthVerticalSixthCalculation = VerticalSixthCalculation(ordinal: 3)
+    static let fifthVerticalSixthCalculation = VerticalSixthCalculation(ordinal: 4)
+    static let lastVerticalSixthCalculation = VerticalSixthCalculation(ordinal: 5)
 
     static let calculationsByAction: [WindowAction: WindowCalculation] = [
      .leftHalf: leftHalfCalculation,
@@ -334,6 +355,20 @@ class WindowCalculationFactory {
      .bottomCenterLeftEighth: bottomCenterLeftEighthCalculation,
      .bottomCenterRightEighth: bottomCenterRightEighthCalculation,
      .bottomRightEighth: bottomRightEighthCalculation,
+     .firstVerticalEighth: firstVerticalEighthCalculation,
+     .secondVerticalEighth: secondVerticalEighthCalculation,
+     .thirdVerticalEighth: thirdVerticalEighthCalculation,
+     .fourthVerticalEighth: fourthVerticalEighthCalculation,
+     .fifthVerticalEighth: fifthVerticalEighthCalculation,
+     .sixthVerticalEighth: sixthVerticalEighthCalculation,
+     .seventhVerticalEighth: seventhVerticalEighthCalculation,
+     .lastVerticalEighth: lastVerticalEighthCalculation,
+     .firstVerticalSixth: firstVerticalSixthCalculation,
+     .secondVerticalSixth: secondVerticalSixthCalculation,
+     .thirdVerticalSixth: thirdVerticalSixthCalculation,
+     .fourthVerticalSixth: fourthVerticalSixthCalculation,
+     .fifthVerticalSixth: fifthVerticalSixthCalculation,
+     .lastVerticalSixth: lastVerticalSixthCalculation,
      .halveHeightUp: halfOrDoubleDimensionCalculation,
      .halveHeightDown: halfOrDoubleDimensionCalculation,
      .halveWidthLeft: halfOrDoubleDimensionCalculation,

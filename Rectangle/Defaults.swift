@@ -22,6 +22,8 @@ class Defaults {
     static let almostMaximizeWidth = FloatDefault(key: "almostMaximizeWidth")
     static let gapSize = FloatDefault(key: "gapSize")
     static let skipGapTopEdge = BoolDefault(key: "skipGapTopEdge")
+    static let snapBeforeReachingEdges = DoubleDefault(key: "snapBeforeReachingEdges")
+
     static let snapEdgeMarginTop = FloatDefault(key: "snapEdgeMarginTop", defaultValue: 5)
     static let snapEdgeMarginBottom = FloatDefault(key: "snapEdgeMarginBottom", defaultValue: 5)
     static let snapEdgeMarginLeft = FloatDefault(key: "snapEdgeMarginLeft", defaultValue: 5)
@@ -52,7 +54,8 @@ class Defaults {
     static let screenEdgeGapLeft = FloatDefault(key: "screenEdgeGapLeft", defaultValue: 0)
     static let screenEdgeGapRight = FloatDefault(key: "screenEdgeGapRight", defaultValue: 0)
     static let screenEdgeGapsOnMainScreenOnly = BoolDefault(key: "screenEdgeGapsOnMainScreenOnly")
-    static let screenEdgeGapTopNotch = FloatDefault(key: "screenEdgeGapTopNotch", defaultValue: 0)
+    static let screenEdgeGapTopNotch = DoubleDefault(key: "screenEdgeGapTopNotch", defaultValue: -1)
+    static let ignoreMenuBar = OptionalBoolDefault(key: "ignoreMenuBar")
     static let lastVersion = StringDefault(key: "lastVersion")
     static let installVersion = StringDefault(key: "installVersion")
     static let showAllActionsInMenu = OptionalBoolDefault(key: "showAllActionsInMenu")
@@ -60,8 +63,11 @@ class Defaults {
     static var SUHasLaunchedBefore: Bool { UserDefaults.standard.bool(forKey: "SUHasLaunchedBefore") }
     static let footprintAlpha = DoubleDefault(key: "footprintAlpha")
     static var effectiveFootprintAlpha: Double {
+        effectiveFootprintAlpha(usesBlur: footprintBlur.enabled)
+    }
+    static func effectiveFootprintAlpha(usesBlur: Bool) -> Double {
         if UserDefaults.standard.object(forKey: footprintAlpha.key) == nil {
-            return footprintBlur.enabled ? 0 : 0.3
+            return usesBlur ? 0 : 0.3
         }
         return footprintAlpha.value
     }
@@ -87,6 +93,7 @@ class Defaults {
     static let cyclingOverlapOffsetSize = FloatDefault(key: "cyclingOverlapOffsetSize", defaultValue: 11)
     static let cyclingOverlapMaxCascade = IntDefault(key: "cyclingOverlapMaxCascade", defaultValue: 1)
     static let stackBadge = OptionalBoolDefault(key: "stackBadge")
+    static let stackSameSizeOnly = OptionalBoolDefault(key: "stackSameSizeOnly")
     static let fullIgnoreBundleIds = JSONDefault<[String]>(key: "fullIgnoreBundleIds")
     static let notifiedOfProblemApps = BoolDefault(key: "notifiedOfProblemApps")
     static let specifiedHeight = FloatDefault(key: "specifiedHeight", defaultValue: 1050)
@@ -121,7 +128,7 @@ class Defaults {
     static let doubleClickTitleBar = IntDefault(key: "doubleClickTitleBar")
     static let doubleClickTitleBarRestore = OptionalBoolDefault(key: "doubleClickTitleBarRestore")
     static let doubleClickTitleBarIgnoredApps = JSONDefault<[String]>(key: "doubleClickTitleBarIgnoredApps")
-    static let doubleClickToolBarIgnoredApps = JSONDefault<Set<String>>(key: "doubleClickTitleBarIgnoredApps", defaultValue: ["epp.package.java"])
+    static let doubleClickToolBarIgnoredApps = JSONDefault<Set<String>>(key: "doubleClickToolBarIgnoredApps", defaultValue: ["epp.package.java"])
     static let ignoreDragSnapToo = OptionalBoolDefault(key: "ignoreDragSnapToo")
     static let systemWideMouseDown = OptionalBoolDefault(key: "systemWideMouseDown")
     static let systemWideMouseDownApps = JSONDefault<Set<String>>(key:"systemWideMouseDownApps", defaultValue: Set<String>(["org.languagetool.desktop", "com.microsoft.teams2"]))
@@ -130,6 +137,8 @@ class Defaults {
     static let screensOrderedByX = IntEnumDefault<ScreenOrdering>(key: "screensOrderedByX", defaultValue: .yThenMinX)
     static let combinedDisplayMode = OptionalBoolDefault(key: "combinedDisplayMode")
     static let greenButtonOverride = BoolDefault(key: "greenButtonOverride")
+    static let mouseButtonShortcutsUseWindowUnderCursor = BoolDefault(key: "mouseButtonShortcutsUseWindowUnderCursor")
+    static let ignoreShortcutsInMissionControl = BoolDefault(key: "ignoreShortcutsInMissionControl", defaultValue: true)
     static let wasWelcomeDisplayed = BoolDefault(key: "wasWelcomeDisplayed")
     static var array: [Default] = [
         launchOnLogin,
@@ -150,6 +159,7 @@ class Defaults {
         almostMaximizeWidth,
         gapSize,
         skipGapTopEdge,
+        snapBeforeReachingEdges,
         snapEdgeMarginTop,
         snapEdgeMarginBottom,
         snapEdgeMarginLeft,
@@ -178,6 +188,7 @@ class Defaults {
         screenEdgeGapRight,
         screenEdgeGapsOnMainScreenOnly,
         screenEdgeGapTopNotch,
+        ignoreMenuBar,
         showAllActionsInMenu,
         showAdditionalSizesInMenu,
         footprintAlpha,
@@ -238,8 +249,11 @@ class Defaults {
         cyclingOverlapOffsetSize,
         cyclingOverlapMaxCascade,
         stackBadge,
+        stackSameSizeOnly,
         moveFixedSizeToEdge,
-        greenButtonOverride
+        greenButtonOverride,
+        mouseButtonShortcutsUseWindowUnderCursor,
+        ignoreShortcutsInMissionControl
     ]
 }
 
@@ -277,12 +291,16 @@ class BoolDefault: Default {
         }
     }
     
-    init(key: String) {
+    init(key: String, defaultValue: Bool = false) {
         self.key = key
-        enabled = UserDefaults.standard.bool(forKey: key)
+        if UserDefaults.standard.object(forKey: key) == nil {
+            enabled = defaultValue
+        } else {
+            enabled = UserDefaults.standard.bool(forKey: key)
+        }
         initialized = true
     }
-    
+
     func load(from codable: CodableDefault) {
         if let value = codable.bool {
             self.enabled = value
@@ -314,6 +332,7 @@ class OptionalBoolDefault: Default {
     
     var userDisabled: Bool { enabled == false }
     var userEnabled: Bool { enabled == true }
+    var userModified: Bool { enabled != nil }
     var notSet: Bool { enabled == nil }
     
     init(key: String) {
