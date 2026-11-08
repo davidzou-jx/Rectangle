@@ -4,6 +4,10 @@ import Foundation
 
 class TopHalfCalculation: WindowCalculation, RepeatedExecutionsInThirdsCalculation {
 
+    override func calculate(_ params: WindowCalculationParameters) -> WindowCalculationResult? {
+        calculateAcrossVerticalDisplays(params) ?? super.calculate(params)
+    }
+
     override func calculateRect(_ params: RectCalculationParameters) -> RectResult {
 
         if Defaults.halvesPreserveOtherAxisSize.enabled, let tiledRect = HalvesPreserveOtherAxisSize.rect(for: params) {
@@ -13,17 +17,14 @@ class TopHalfCalculation: WindowCalculation, RepeatedExecutionsInThirdsCalculati
         if Defaults.subsequentExecutionMode.value == .switchSides {
             // Repeating Top Half while the window still sits on the top half moves it to the bottom
             // half; see LeftRightHalfCalculation.calculateSwitchSides.
-            guard isRepeatedCommand(params) else { return calculateFirstRect(params) }
-            let opposite = RectCalculationParameters(window: params.window, visibleFrameOfScreen: params.visibleFrameOfScreen,
-                                                     action: .bottomHalf, lastAction: params.lastAction)
-            return RectResult(WindowCalculationFactory.bottomHalfCalculation.calculateFirstRect(opposite).rect, resultingAction: .bottomHalf)
+            return isRepeatedCommand(params) ? facingVerticalHalf(params) : calculateFirstRect(params)
         }
 
         if params.lastAction == nil || !Defaults.subsequentExecutionMode.resizes {
             return calculateFirstRect(params)
         }
         
-        return calculateRepeatedSideRect(params)
+        return calculateRepeatedRect(params)
     }
     
     func calculateFirstRect(_ params: RectCalculationParameters) -> RectResult {
@@ -36,8 +37,4 @@ class TopHalfCalculation: WindowCalculation, RepeatedExecutionsInThirdsCalculati
         return RectResult(HalfSplitFrameCalculation.verticalRect(in: params.visibleFrameOfScreen, side: .leading, fraction: fraction))
     }
 
-    func calculateRepeatedRect(_ params: RectCalculationParameters) -> RectResult {
-        calculateRepeatedSideRect(params)
-    }
-    
 }
