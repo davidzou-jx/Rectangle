@@ -99,13 +99,16 @@ struct BehaviorSettingsView: View {
                         
                         HStack(spacing: 12) {
                             Text("Cyclic corner shortcuts expand")
+                                .lineLimit(1)
+                                .fixedSize()
                             Spacer()
-                            Picker("", selection: $viewModel.cornerCycleExpansionAxis) {
-                                Text("horizontally").tag(CornerCycleExpansionAxis.horizontal)
-                                Text("vertically").tag(CornerCycleExpansionAxis.vertical)
+                            Picker("", selection: $viewModel.cornerCycleExpansionMode) {
+                                Text("horizontally").tag(CornerCycleExpansionMode.horizontal)
+                                Text("vertically").tag(CornerCycleExpansionMode.vertical)
+                                Text("based on display orientation").tag(CornerCycleExpansionMode.displayOrientation)
                             }
-                            .pickerStyle(.radioGroup)
-                            .horizontalRadioGroupLayout()
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                         }
                         
                         if viewModel.showCooperativeCornerResize {
@@ -147,10 +150,6 @@ struct BehaviorSettingsView: View {
                 CustomDisclosureGroup {
                     VStack(alignment: .leading, spacing: 12) {
                         Divider()
-                        if viewModel.showCursorScreenDetection {
-                            Toggle("Use cursor screen detection", isOn: $viewModel.useCursorScreenDetection)
-                        }
-                        
                         Toggle("Double-click window title bar to maximize/restore", isOn: $viewModel.doubleClickTitleBar)
                         Toggle("Repeated maximize restores the previous size and position", isOn: $viewModel.repeatedMaximizeRestoresPrevious)
 
@@ -173,6 +172,12 @@ struct BehaviorSettingsView: View {
                 CustomDisclosureGroup {
                     VStack(alignment: .leading, spacing: 12) {
                         Divider()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Toggle("Move window to display where cursor is", isOn: $viewModel.useCursorScreenDetection)
+                            Text("Commands use the display containing the cursor instead of the window.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         Toggle("Move cursor along with window across displays", isOn: $viewModel.moveCursorAcrossDisplays)
                         Toggle("Preserve maximize state when moving across displays", isOn: $viewModel.autoMaximize)
                         Toggle("Switch to the destination Space after moving a window", isOn: $viewModel.followMovedWindowToSpace)
@@ -336,8 +341,8 @@ struct BehaviorSettingsView: View {
                                     Text("Todo side")
                                     Spacer()
                                     Picker("", selection: $viewModel.todoSidebarSide) {
-                                        Text("Left").tag(TodoSidebarSide.left)
-                                        Text("Right").tag(TodoSidebarSide.right)
+                                        Text(TodoSidebarSide.left.title).tag(TodoSidebarSide.left)
+                                        Text(TodoSidebarSide.right.title).tag(TodoSidebarSide.right)
                                     }
                                     .frame(width: 90)
                                 }

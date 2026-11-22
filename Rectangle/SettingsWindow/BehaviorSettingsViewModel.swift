@@ -15,9 +15,9 @@ final class BehaviorSettingsViewModel {
     }
     
     var selectedCycleSizes: Set<CycleSize> = []
-    var cornerCycleExpansionAxis: CornerCycleExpansionAxis {
+    var cornerCycleExpansionMode: CornerCycleExpansionMode {
         didSet {
-            Defaults.cornerCycleExpansionAxis.value = cornerCycleExpansionAxis
+            Defaults.cornerCycleExpansionAxis.value = cornerCycleExpansionMode
         }
     }
     
@@ -201,7 +201,6 @@ final class BehaviorSettingsViewModel {
     
     // MARK: - UI Conditional Flags
     var showCooperativeCornerResize: Bool { Defaults.cooperativeCornerResize.enabled }
-    var showCursorScreenDetection: Bool { Defaults.useCursorScreenDetection.enabled }
     var showCombinedDisplayMode: Bool { !NSScreen.screensHaveSeparateSpaces }
     var stageCapable: Bool { StageUtil.stageCapable }
     
@@ -227,7 +226,7 @@ final class BehaviorSettingsViewModel {
         self.subsequentExecutionMode = Defaults.subsequentExecutionMode.value
         let isCycleChanged = Defaults.cycleSizesIsChanged.enabled
         self.selectedCycleSizes = isCycleChanged ? Defaults.selectedCycleSizes.value : CycleSize.defaultSizes
-        self.cornerCycleExpansionAxis = Defaults.cornerCycleExpansionAxis.value
+        self.cornerCycleExpansionMode = Defaults.cornerCycleExpansionAxis.value
         self.cooperativeCornerResize = Defaults.cooperativeCornerResize.enabled
         let scalingMode = Defaults.sizeScalingMode.value
         self.sizeScalingMode = scalingMode
@@ -293,7 +292,7 @@ final class BehaviorSettingsViewModel {
         self.subsequentExecutionMode = Defaults.subsequentExecutionMode.value
         let isCycleChanged = Defaults.cycleSizesIsChanged.enabled
         self.selectedCycleSizes = isCycleChanged ? Defaults.selectedCycleSizes.value : CycleSize.defaultSizes
-        self.cornerCycleExpansionAxis = Defaults.cornerCycleExpansionAxis.value
+        self.cornerCycleExpansionMode = Defaults.cornerCycleExpansionAxis.value
         self.cooperativeCornerResize = Defaults.cooperativeCornerResize.enabled
         self.sizeScalingMode = Defaults.sizeScalingMode.value
         self.sizeScalingAmount = Self.configuredSizeScalingAmount(for: sizeScalingMode)
